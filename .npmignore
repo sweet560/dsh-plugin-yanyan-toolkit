@@ -1,0 +1,10 @@
+# Release tarballs are build artifacts, not package contents.
+*.tgz
+
+# Local git / backup / temp artifacts never belong in an npm package.
+# 注意：根 package.json 的 files 白名单优先于本文件，下列条目是防御性兜底。
+.git/
+.github/
+.backup-*/
+.tmp_*
+test/

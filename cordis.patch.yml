@@ -1,0 +1,35 @@
+# 研研工具包：一个 bundle 挂载四条 loader 行 —— 自身元数据行 + 三个功能插件行。
+# 每行 name 必须互不相同且恰好等于对应包的 package.json name，否则
+# dsh-client-modules 会报 duplicate factory registration。
+# 三个功能插件各有独立 id，安装后可由用户在插件页单独启停。
+- insert:
+    # 自身行：只承载健康检查路由与空 client 壳，不贡献任何 UI。
+    - id: yanyan-toolkit-compat
+      name: 'dsh-plugin-yanyan-toolkit'
+
+    # 插件一「插件更新」：检查本地插件与线上插件版本，逐个更新。
+    - id: dsh-plugin-yanyan-update
+      name: 'dsh-plugin-yanyan-update'
+      config:
+        checkOnOpen: false
+        includeLocal: true
+        includeRegistry: true
+
+    # 插件二「会话管理」：直接复用现成 npm 包 @linxin666/dsh-session-archive@0.4.18，
+    # 其自动归档 / 自动删除 / 单条与批量删除已覆盖全部需求，零重复造轮子。
+    # name 必须恰好等于真实包名，才能同时挂载它的 host 与 browser 半区。
+    # id 沿用该包自身 patch 的 session-archive：即使它被单独安装，
+    # 同 id 行也只会合并成一条；下面的 name 级防重守卫再兜一层底，
+    # 避免同 name 不同 id 的两条行重复挂载（loader 会报 duplicate prefix route）。
+    - id: session-archive
+      name: '@linxin666/dsh-session-archive'
+      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === '@linxin666/dsh-session-archive' && e.options.id !== 'session-archive' && !e.disabled)"
+
+    # 插件三「子智能体管理」：会话顶部标签 + 行尾删除 + 清理全部空闲 + 自动清理。
+    - id: dsh-plugin-yanyan-subagent
+      name: 'dsh-plugin-yanyan-subagent'
+      config:
+        tabLabel: '智能体管理'
+        autoCleanEnabled: false
+        idleMinutes: 30
+        checkIntervalMin: 1

@@ -1,0 +1,32 @@
+{
+  "name": "dsh-plugin-yanyan-update",
+  "version": "1.2.0",
+  "description": "插件更新：检查本地与线上插件版本并逐个更新",
+  "type": "module",
+  "main": "lib/index.js",
+  "icon": "icon.svg",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": ["lib/index.js","lib/client.js","cordis.patch.yml","icon.svg","locale/en.json","locale/zh.json","README.md","README.zh.md"],
+  "keywords": ["deepseek-harness","dsh-plugin","plugin-manager","plugin-update","cordis"],
+  "author": "sweet560",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sweet560/dsh-plugin-yanyan-toolkit.git",
+    "directory": "packages/dsh-plugin-yanyan-update"
+  },
+  "engines": { "node": "^22.19.0 || >=24.0.0" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dsh": {
+    "engines": { "dsh": ">=0.2.2-rc.2" },
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "inject": ["locale"], "platform": "web" },
+    "manifestVersion": 1
+  }
+}

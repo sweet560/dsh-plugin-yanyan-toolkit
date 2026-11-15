@@ -1,0 +1,7 @@
+- insert:
+    - id: dsh-plugin-yanyan-update
+      name: 'dsh-plugin-yanyan-update'
+      config:
+        checkOnOpen: false
+        includeLocal: true
+        includeRegistry: true

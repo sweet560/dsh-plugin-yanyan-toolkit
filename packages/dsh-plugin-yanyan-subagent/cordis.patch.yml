@@ -1,0 +1,8 @@
+- insert:
+    - id: dsh-plugin-yanyan-subagent
+      name: 'dsh-plugin-yanyan-subagent'
+      config:
+        tabLabel: 智能体管理
+        autoCleanEnabled: false
+        idleMinutes: 30
+        checkIntervalMin: 1

@@ -1,0 +1,81 @@
+{
+  "name": "dsh-plugin-yanyan-toolkit",
+  "version": "1.2.0",
+  "description": "研研工具包：聚合「插件更新」「会话管理」「子智能体管理」三个可独立开关的插件。",
+  "type": "module",
+  "main": "lib/index.js",
+  "icon": "icon.svg",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/en.json",
+    "locale/zh.json",
+    "README.md",
+    "README.zh.md",
+    "README.i18n.yaml",
+    "CHANGELOG.md",
+    "LICENSE",
+    "scripts/cleanup-ghost-subagents.mjs",
+    "packages",
+    "!packages/*/test"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh",
+    "plugin-manager",
+    "session-archive",
+    "subagent",
+    "toolkit",
+    "cordis",
+    "npm-package",
+    "gitee-mirror"
+  ],
+  "author": "sweet560",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sweet560/dsh-plugin-yanyan-toolkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sweet560/dsh-plugin-yanyan-toolkit/issues"
+  },
+  "homepage": "https://github.com/sweet560/dsh-plugin-yanyan-toolkit/blob/main#readme",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "pack": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "dsh-plugin-yanyan-update": "file:./packages/dsh-plugin-yanyan-update",
+    "dsh-plugin-yanyan-subagent": "file:./packages/dsh-plugin-yanyan-subagent",
+    "@linxin666/dsh-session-archive": "^0.4.18"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.2-rc.2"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    },
+    "manifestVersion": 1
+  }
+}

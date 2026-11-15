@@ -1,0 +1,9 @@
+{
+  "_comment": "一次性迁移：旧版「删除=归档」遗留、已由 scripts/cleanup-ghost-subagents.mjs 从磁盘清除的 mnemon 虚拟委派 id。subagentCatalog 由 append-only 会话日志重建，清缓存后宿主仍可能把它们带回来；host /config 把本清单下发给 client，client 在启动时写入 yanyan-subagent.deletedIds 持久化隐藏清单，保证这些条目不再显示。id 均为去 session- 前缀后的核心 id。前 3 条来自「已归档」残留，最后 1 条是用户报错里的 session/not-found 条目。",
+  "ids": [
+    "mnemon-run-v1-47f5a5fc-1659-46da-9b66-8dbdbed10a0f",
+    "mnemon-run-v1-b59053b1-57bb-4a23-bbd8-972e210c1cb0",
+    "mnemon-run-v1-8a02e7a3-b67f-44ec-8277-ef733fc6c252",
+    "mnemon-run-v1-debd95cd-2980-4801-9299-c1da04bc5775"
+  ]
+}
