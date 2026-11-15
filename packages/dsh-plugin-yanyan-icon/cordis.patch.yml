@@ -2,6 +2,6 @@
     - id: dsh-plugin-yanyan-icon
       name: 'dsh-plugin-yanyan-icon'
       config:
-        radius: 14
-        padding: 4
+        radius: 13
+        padding: 3
         borderWidth: 1

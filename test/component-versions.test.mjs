@@ -65,7 +65,7 @@ test('四个自写组件版本精确等于各自 package.json，且互不强制�
     v['dsh-plugin-yanyan-icon'],
     readJson('packages/dsh-plugin-yanyan-icon/package.json').version,
   );
-  // 聚合包 1.4.0 / update 1.2.1 / subagent 1.2.2 / icon 1.0.0 本就不同，正是「独立版本」。
+  // 聚合包 1.4.1 / update 1.2.1 / subagent 1.2.2 / icon 1.0.1 本就不同，正是「独立版本」。
   assert.ok(new Set(OWN_PKGS.map((p) => v[p])).size >= 2);
 });
 

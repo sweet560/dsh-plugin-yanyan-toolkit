@@ -77,8 +77,8 @@ export function normalizeOptions(raw) {
   return {
     background: safeColor(c.background, '#eef2ff'),
     border: safeColor(c.border, '#c7d2fe'),
-    radius: clampInt(c.radius, 0, 28, 14),
-    padding: clampInt(c.padding, 0, 16, 4),
+    radius: clampInt(c.radius, 0, 28, 13),
+    padding: clampInt(c.padding, 0, 16, 3),
     borderWidth: clampInt(c.borderWidth, 0, 4, 1),
   };
 }
@@ -86,14 +86,16 @@ export function normalizeOptions(raw) {
 // 核心纯函数：生成 64×64 viewBox、圆角矩形背景、居中内嵌位图的自包含静态 SVG。
 // 无 script、无 foreignObject、无外链、无 currentColor（<img> 上下文不继承页面色，
 // 所有颜色都给显式值），内嵌图片经 clipPath 裁成圆角，四周留出 padding 呼吸空间。
+// 默认布局（方案 A）：outer=3 / frameSize=58 / padding=3 / radius=13，位图占 52/64≈81%，
+// 在 DSH 列表行 30px 下比旧的 44/64≈69% 明显更大，同时保留圆角框呼吸感。
 // 只写 xlink:href 一个 href，避免同一份 base64 在文件里出现两次把体积翻倍。
 export function buildIconSvg(dataUrl, rawOptions) {
   if (!validateDataUrl(dataUrl)) {
     throw new Error('仅支持 PNG / JPEG / WebP 的 base64 图片数据。');
   }
   const o = normalizeOptions(rawOptions);
-  const outer = 6;
-  const frameSize = 52;
+  const outer = 3;
+  const frameSize = 58;
   const inner = frameSize - o.padding * 2;
   const ix = outer + o.padding;
   const innerRadius = Math.max(0, o.radius - o.padding);

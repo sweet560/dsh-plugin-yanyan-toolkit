@@ -41,14 +41,14 @@ test('validateDataUrl 只接受位图 base64 data URL', () => {
 
 test('normalizeOptions 做整段覆盖与范围收敛', () => {
   assert.deepEqual(normalizeOptions({}), {
-    background: '#eef2ff', border: '#c7d2fe', radius: 14, padding: 4, borderWidth: 1,
+    background: '#eef2ff', border: '#c7d2fe', radius: 13, padding: 3, borderWidth: 1,
   });
   assert.deepEqual(normalizeOptions({ radius: 999, padding: -5, borderWidth: 9, background: '#123456' }), {
     background: '#123456', border: '#c7d2fe', radius: 28, padding: 0, borderWidth: 4,
   });
   // 非法颜色与注入字符串一律回退，绝不进 SVG 属性。
   assert.deepEqual(normalizeOptions({ background: 'red" onload="x', border: '#abc' }), {
-    background: '#eef2ff', border: '#abc', radius: 14, padding: 4, borderWidth: 1,
+    background: '#eef2ff', border: '#abc', radius: 13, padding: 3, borderWidth: 1,
   });
   assert.equal(normalizeOptions({ radius: '7' }).radius, 7);
 });
@@ -72,6 +72,14 @@ test('buildIconSvg 生成自包含、无脚本、无外链、无 currentColor �
   assert.ok(!/https?:\/\//.test(svg.replace('http://www.w3.org/2000/svg', '').replace('http://www.w3.org/1999/xlink', '')));
   assert.ok(Buffer.byteLength(svg, 'utf8') <= 32 * 1024, '不超过 32 KiB');
   assert.ok(svg.trimEnd().endsWith('</svg>'));
+});
+
+test('buildIconSvg 默认布局采用方案 A：位图占 52/64≈81%，30px 列表行不显小', () => {
+  const svg = buildIconSvg(PNG);
+  assert.ok(svg.includes('<rect x="3" y="3" width="58" height="58" rx="13"'), '外层圆角框 58');
+  assert.ok(svg.includes('<rect x="6" y="6" width="52" height="52" rx="10"'), '裁切路径 52');
+  assert.ok(svg.includes('<image x="6" y="6" width="52" height="52"'), '位图占 52/64');
+  assert.ok(!svg.includes('width="44"'), '不再是旧的 44/64 偏小布局');
 });
 
 test('buildIconSvg 拒绝非法图片与超限产物', () => {

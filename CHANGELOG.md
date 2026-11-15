@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## 1.4.1 — 2026-11-15
+
+### 图标生成：修复生成图标偏小 + 版本号迭代
+
+- **现象**（用户反馈）：插件页「已安装插件」列表里研研工具包的哈士奇图标明显比 dsh-ops / dsh-pet 等邻居插件小。
+- **根因**：`packages/dsh-plugin-yanyan-icon/lib/index.js` 的 `buildIconSvg` 默认布局为 `outer=6 / frameSize=52 / padding=4 / radius=14`，位图仅占 `44/64≈69%`；浅紫背景 `#eef2ff` 描边 `#c7d2fe` 在白底上几乎不可见，视觉上只剩中间一小块。用 Edge 无头浏览器按 DSH 真实 30px / 36px 渲染做了五方案对比图确认。
+- **修复**：改为用户选定的「方案 A · 适度放大」——`outer=3 / frameSize=58 / padding=3 / radius=13`，位图占 `52/64≈81%`，保留圆角框呼吸感且 30px 下明显更清楚。同步 `normalizeOptions` 默认值、根与子包两处 `cordis.patch.yml` 的 config、单测断言与双语文档。
+- **图标重生成**：用更新后的 `buildIconSvg` 重新生成聚合根包 `icon.svg` 与桌面三张哈士奇 `icon.svg` / `icon-2.svg` / `icon-3.svg`，结构校验 3/3 PASS 并经真实 Edge `<img>` 渲染确认。
+- **版本**：聚合根包 → `1.4.1`；图标生成组件 `dsh-plugin-yanyan-icon` → `1.0.1`（随生成器修复一并迭代）；其余组件版本不变。
+- **测试**：`npm test` 全绿；新增「默认布局方案 A」单测锁定 `52/64` 占比，防止回退。
+- **生效**：涉及 bundle 行与 `cordis.patch.yml`，需重新 `npm pack` 并在插件页更新安装（或重建 bundle 后刷新页面）。
+
 ## 1.4.0 — 2026-11-15
 
 ### 新增「图标生成」组件包

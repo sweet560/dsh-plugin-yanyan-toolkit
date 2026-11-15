@@ -6,7 +6,7 @@
 
 - 在插件页「已安装插件」标题行右侧提供「图标生成」按钮，点开下拉面板。
 - 选择 PNG / JPEG / WebP 图片后，浏览器用原生 Canvas 居中裁切（cover）并缩到 48×48 PNG。
-- POST 到本包 host 半区 `/__dsh-plugin-yanyan-icon/generate`，由纯函数 `buildIconSvg` 包装成 64×64 viewBox、圆角矩形背景、居中内嵌位图的自包含静态 SVG。
+- POST 到本包 host 半区 `/__dsh-plugin-yanyan-icon/generate`，由纯函数 `buildIconSvg` 包装成 64×64 viewBox、圆角矩形背景、居中内嵌位图的自包含静态 SVG（默认位图占 52/64≈81%，在 30px 列表行下清晰可辨）。
 - 按插件列表真实的 30px 行尺寸与 36px 卡片尺寸双预览，支持一键下载 `icon.svg`。
 - 生成物无脚本、无外链、无 foreignObject、无 currentColor（`<img>` 上下文不继承页面色），解码后不超过 32 KiB，与 DSH 市场索引的内联图标上限对齐。
 
