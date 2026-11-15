@@ -1,9 +1,29 @@
 {
-  "_comment": "一次性迁移：旧版「删除=归档」遗留、已由 scripts/cleanup-ghost-subagents.mjs 从磁盘清除的 mnemon 虚拟委派 id。subagentCatalog 由 append-only 会话日志重建，清缓存后宿主仍可能把它们带回来；host /config 把本清单下发给 client，client 在启动时写入 yanyan-subagent.deletedIds 持久化隐藏清单，保证这些条目不再显示。id 均为去 session- 前缀后的核心 id。前 3 条来自「已归档」残留，最后 1 条是用户报错里的 session/not-found 条目。",
+  "_comment": "一次性迁移清单 ∪ 全库日志中已原位退休的 childId；host /config 把本清单作为 legacyHiddenIds 下发给 client，client 写入 yanyan-subagent.deletedIds 持久化隐藏清单。新版 host 另经 hiddenIds 字段下发 collectHiddenIds() 动态全集，本文件作为旧 host 进程兼容桥：legacyHiddenIds() 每次请求从磁盘读本文件，故刷新页面即可即时生效。",
   "ids": [
+    "bfde730b-e00c-40db-ac9b-1a243f66c279",
+    "d62abba7-468b-4f57-8605-e65118c7835c",
+    "mnemon-run-v1-0b3db3e5-b6f0-4d74-82f5-124822a15c53",
+    "mnemon-run-v1-28354b4a-4859-4c8e-aebd-e9281f13bde4",
+    "mnemon-run-v1-2e7c7461-1d43-4abb-a5f2-71ea29159808",
+    "mnemon-run-v1-3681c2e1-10f8-4b69-a270-13a2cbb319ec",
+    "mnemon-run-v1-3ca1a5c0-b695-4241-9a19-981fd67524bb",
     "mnemon-run-v1-47f5a5fc-1659-46da-9b66-8dbdbed10a0f",
-    "mnemon-run-v1-b59053b1-57bb-4a23-bbd8-972e210c1cb0",
+    "mnemon-run-v1-528b11c1-88e8-4077-963b-d23a93e6aa15",
+    "mnemon-run-v1-619748db-5cd2-42b2-a649-212ab7280466",
+    "mnemon-run-v1-62cde497-193e-4224-9f72-1b2d9c34efb8",
+    "mnemon-run-v1-7006f948-4266-456e-85d3-9a61232f6090",
+    "mnemon-run-v1-702601c3-827b-444e-bece-421700b856d2",
+    "mnemon-run-v1-7c09b172-06c4-43a1-97ad-3e312c41af80",
     "mnemon-run-v1-8a02e7a3-b67f-44ec-8277-ef733fc6c252",
-    "mnemon-run-v1-debd95cd-2980-4801-9299-c1da04bc5775"
+    "mnemon-run-v1-a3382a0a-8398-4a6c-84e8-545a8374537b",
+    "mnemon-run-v1-b0016960-86d9-4c46-a4b3-3ef223f1519e",
+    "mnemon-run-v1-b59053b1-57bb-4a23-bbd8-972e210c1cb0",
+    "mnemon-run-v1-be28ac2b-5cb7-4fbe-8243-834b2196fdf9",
+    "mnemon-run-v1-daf281d9-4f59-4936-81d9-f7d721a4b990",
+    "mnemon-run-v1-debd95cd-2980-4801-9299-c1da04bc5775",
+    "mnemon-run-v1-ec8be48b-e49f-4970-880d-c9191227e03a",
+    "mnemon-run-v1-fd34e0d3-2f28-43e1-a50a-a0b1881d0610",
+    "mnemon-run-v1-ffbcb086-9796-425c-a6d8-26ce7d1209ea"
   ]
 }

@@ -16,7 +16,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 export const name = 'dsh-plugin-yanyan-update';
-export const VERSION = '1.0.0';
+export const VERSION = '1.2.1';
 export const inject = ['webServer', 'connection'];
 export const ROUTE_BASE = '/__dsh-plugin-yanyan-update';
 
@@ -548,6 +548,77 @@ async function updateLocal(id, cls, profileDir, cfg) {
   }
 }
 
+// ───────────── 更新后启用态恢复（修复「更新完默认关闭」） ─────────────
+// 根因（已查证官方实现）：updateBundle 在 HMR 下先 removeBundle 再 installBundle。
+// removeBundle 内部 selectBundle(name, false)，installBundle 仅把 bundle 选择态放回
+// （options?.enabled !== false 时 selectBundle(name, true)），并不保证「已安装插件」页
+// 开关所依据的 entry 级 enablement：cordis.patch.yml 的 loader 行 override（见
+// dsh-web-0.4.16/packages/dsh-plugin-manager/src/host/state.ts:145）。实测面板显示
+// 「更新完成，已即时生效。」后，插件行开关落为关闭，插件不会自动启动。
+// 修复借鉴官方 gateway.ts:1631 restoreBundleSelection：更新前容错捕获启用态，
+// 更新成功后显式放回；所有方法可选、异常吞掉、绝不改动 ok/updated/message。
+
+// 容错读取更新前的启用态。listPlugins 条目含 entryId / moduleName / enabled
+// （entry 级，即开关本体，且 entryId 是 setPluginEnabled 要求的身份）；listBundles
+// 条目含 name / enabled（bundle 选择态，官方 updateBundle 读取的同一来源）。
+// 读不到或抛错一律按「开启」处理：可更新插件绝大多数正在使用，且官方 restoreBundleSelection
+// 也是无条件 setBundleEnabled(name, true)。只有明确读到 enabled === false（用户主动关闭）
+// 才标记 wasDisabled，避免把用户故意关掉的插件强行打开。
+export async function readEnablement(manager, id) {
+  const out = { wasDisabled: false, entryId: null };
+  const asList = (res) => {
+    if (Array.isArray(res)) return res;
+    if (res && typeof res === 'object' && Array.isArray(res.value)) return res.value;
+    return [];
+  };
+  const matches = (row) => row && typeof row === 'object' &&
+    (row.entryId === id || row.moduleName === id || row.name === id);
+  try {
+    if (manager && typeof manager.listPlugins === 'function') {
+      const row = asList(await manager.listPlugins()).find(matches);
+      if (row) {
+        if (typeof row.entryId === 'string' && row.entryId) out.entryId = row.entryId;
+        out.wasDisabled = row.enabled === false;
+        return out;
+      }
+    }
+  } catch (error) {
+    // 读不到即按开启处理
+  }
+  try {
+    if (manager && typeof manager.listBundles === 'function') {
+      const row = asList(await manager.listBundles()).find((b) => b && b.name === id);
+      if (row) out.wasDisabled = row.enabled === false;
+    }
+  } catch (error) {
+    // 读不到即按开启处理
+  }
+  return out;
+}
+
+// 更新成功后 best-effort 恢复启用态。优先 setPluginEnabled（entry 级，直接持久化
+// patch 行 override，对应「已安装插件」页开关）；该方法缺失或抛错时回退官方
+// restoreBundleSelection 同款 setBundleEnabled（bundle 选择态）。二者均幂等置 true。
+export async function restoreEnablement(manager, id, enablement) {
+  if (!manager || (enablement && enablement.wasDisabled)) return; // 尊重用户主动关闭
+  const target = (enablement && enablement.entryId) || id;
+  try {
+    if (typeof manager.setPluginEnabled === 'function') {
+      await manager.setPluginEnabled(target, true);
+      return;
+    }
+  } catch (error) {
+    // setPluginEnabled 要求 entryId；传包名可能抛 unknown-plugin，回退 bundle 级
+  }
+  try {
+    if (typeof manager.setBundleEnabled === 'function') {
+      await manager.setBundleEnabled(id, true);
+    }
+  } catch (error) {
+    // best-effort，绝不改变更新结论
+  }
+}
+
 // io 为可选注入点，仅供单测替换 IO（network / fs / manager 来源），生产调用省略。
 // 单测据此完全不触碰真实 pluginManager、npm registry 与 profile 文件。
 export async function updateRegistry(ctx, id, cfg, deps, io) {
@@ -595,6 +666,9 @@ export async function updateRegistry(ctx, id, cfg, deps, io) {
   const targetSpec = id + '@' + latest;
   const requestId = 'yanyan-update-' + id + '-' + Date.now() + '-' +
     Math.random().toString(36).slice(2, 8);
+  // 更新前先捕获启用态：官方 updateBundle 只恢复 bundle 选择态，entry 级开关
+  // （「已安装插件」页开关本体）在 remove→install 后会丢失。readEnablement 全容错。
+  const enablement = await readEnablement(manager, id);
 
   // 首选：直接复用官方 updateBundle。HMR 下安装失败/取消时官方自动把移除的版本
   // 重新装回（写入 restore 字段）；非 HMR 直接覆盖安装，根本不先卸载。
@@ -613,7 +687,13 @@ export async function updateRegistry(ctx, id, cfg, deps, io) {
         detail: String((error && error.message) || error),
       });
     }
-    return Object.assign({}, base, parseUpdateResult(outcome), {
+    const parsed = parseUpdateResult(outcome);
+    // 更新成功后把启用态放回：修复官方 updateBundle 只恢复 bundle 选择态、
+    // 导致「已安装插件」页开关变灰、插件不自动启动的问题。失败时不触碰启用态。
+    if (parsed.ok && parsed.updated) {
+      await restoreEnablement(manager, id, enablement);
+    }
+    return Object.assign({}, base, parsed, {
       id,
       spec: targetSpec,
     });
@@ -669,6 +749,8 @@ export async function updateRegistry(ctx, id, cfg, deps, io) {
             (first.error.diagnostic || first.error.code)) || '覆盖安装被拒绝'),
         });
       }
+      // 覆盖安装成功也放回启用态（与首选分支一致，幂等、best-effort）。
+      await restoreEnablement(manager, id, enablement);
       return { ok: true, updated: true, restartRequired: true, id, spec: targetSpec,
         message: '更新完成，重启 DSH 服务后生效。' };
     }
@@ -683,6 +765,8 @@ export async function updateRegistry(ctx, id, cfg, deps, io) {
       const restored = await ensureRestore();
       return failResult(new Error('installBundle 被拒绝：' + JSON.stringify(r2)), restored);
     }
+    // 两阶段 remove→install 成功同样放回启用态。
+    await restoreEnablement(manager, id, enablement);
     return { ok: true, updated: true, restartRequired: true, id, spec: targetSpec,
       message: '更新完成，重启 DSH 服务后生效。' };
   } catch (error) {

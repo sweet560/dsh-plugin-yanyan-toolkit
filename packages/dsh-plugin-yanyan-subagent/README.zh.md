@@ -8,7 +8,7 @@
 - 点击标签打开浮层（浮层通过 `ReactDOM.createPortal` 挂到 `document.body`，避免被顶部操作区的溢出裁剪裁掉；`react-dom` 不可用时降级为把浮层直接追加到 `document.body` 并用原生 DOM 渲染）。
 - 列出当前会话的所有子智能体，显示名称、状态（运行中 / 空闲）、模式以及估算的空闲时长。
 - 行尾的删除按钮（U+2715 乘号，普通 Unicode 数学符号，非 emoji）可逐个删除，删除前二次确认；正在运行的子智能体删除时会先停止。根会话（lead）本身永不删除。
-- 底部「清理全部空闲」按空闲阈值批量删除空闲子智能体，并显示清理数量。
+- 底部「清理全部空闲」立即清理当前列表里所有显示为空闲（非运行中）的子智能体，并显示清理数量；这是手动操作，**不受「空闲阈值」限制**（阈值只用于定时自动清理）。判定与列表「空闲」标签、host `/cleanup` 语义一致：排除运行中、诊断行、根会话与已在隐藏清单中的条目，不再出现「已清理 0 个」却清不掉条目的情况。
 - 「设置」区可开启「自动清理空闲子智能体」（默认关闭），设置「空闲超过（分钟）」与「巡检间隔（分钟）」。开启后按间隔巡检，只清理达到阈值且处于空闲的子智能体；读取列表数据失败时保守不删（fail-closed）。
 
 ## 删除语义（物理删除，不可逆）
@@ -20,6 +20,7 @@
 3. 对 mnemon 虚拟委派（id 形如 `mnemon-run-v1-<uuid>`，不是真实 `session-<uuid>` 会话）直接走第 2 层——这类 id 调用 `archiveSession` 会报 `session/not-found`。
 4. **catalog 根治（v1.2.0）**：`subagentCatalog` 是父会话日志 `session.v4.jsonl.zstd` 里 `subagent/catalog` 事件的 **append-only 投影**（官方 `@deepseek-ai/dsh-chunked-list` 只追加、无删除 API）。因此清缓存、归档、删目录都移除不了底层日志引用，宿主下次 `refreshProjections` 会把条目重建回来。借鉴 `huajiao1998/dsh-plugin-subagent-clean@0.3.0` 的「原位退休」思路（MIT，原始实现 `heiheiha798/dsh-plugin-subagent-delete@0.2.3`），`/purge` 把命中的 `subagent/catalog` 事件**原位改写**为 `{"type":"subagent-delete/retired","seq":<原值>,"time":<原值>,"ignorable":true,"data":{"childId","retiredAt"}}`：`seq`/`time` 原样保留（日志 seq 连续性与压缩事件引用不受影响），而目录投影只在 `type === "subagent/catalog"` 时生成行，于是投影再也不会重建该行。日志解码/编码用 `node:zlib` 的 zstd（Node >= 22.15 / 24），原子 rename 前后各做一次 stat 并发校验；改写失败会排队到 `yanyan-subagent-pending.json`，宿主下次启动补做。
 5. **隐藏清单兜底**：client 侧仍保留持久化隐藏清单 `localStorage['yanyan-subagent.deletedIds']`（存去 `session-` 前缀后的核心 id），在渲染、批量清理、自动清理与官方列表行尾按钮里持续过滤。即便日志改写遇到并发写入/解码失败，已删条目也不会重新出现。
+6. **内存投影根治（v1.2.1）**：官方「N 个子智能体」浮层（`SubagentHeaderLineage`）只读 client 内存 store `ctx.sessions.list.getSnapshot().projectionsBySession[*].values.subagentCatalog`；宿主对已加载的 live 父会话复用内存 fold state，单纯改磁盘 zstd 日志 / 删 projcache 都不会让它重算，于是磁盘已退休的残留行仍会显示、点进去报 `subagent is unavailable (subagent/not-found)`。为此 host 新增 `collectRetiredIds` 扫全库 `subagent-delete/retired` 日志行，经 `/config` 下发 `hiddenIds`（兼容桥：扩充 `legacy-hidden-ids.json` 让旧 host 进程即时下发）；client 的 `patchProjections` 订阅 `sessions.list`，用宿主自身的 `list.set()` 把隐藏清单里的 childId 从所有 `projectionsBySession[*].values.subagentCatalog` 中持续剔除（幂等收敛、不自激），官方浮层 `directCount` 归零后自动隐藏。这是「一直删不掉」的真正根因层。
 
 **该操作不可逆**，删除前会二次确认；正在运行的子智能体删除时先停止。根会话（lead）本身永不删除。
 
@@ -69,4 +70,4 @@ profile 提供 `tools` 服务时注册三个纯对象工具，让 Agent 一句�
 node --test test/*.test.mjs
 ```
 
-纯单元测试覆盖 `normalizeConfig`、`parseCatalog`、`idleFilter` 与删除 id 安全校验，不连接任何 DSH 服务。
+纯单元测试覆盖 `normalizeConfig`、`parseCatalog`、`idleFilter`、删除 id 安全校验、日志原位退休、`collectRetiredIds` / `collectHiddenIds` 与 `patchProjections` 内存投影剔除，不连接任何 DSH 服务（全树 68/68 通过）。

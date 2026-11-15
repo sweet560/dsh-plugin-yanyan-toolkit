@@ -8,6 +8,7 @@
 - 检查本地插件（`link:` / `file:` 目录）：若是 git 仓库，fetch 后比对本地 HEAD 与 `origin/<branch>`；无 `.git` 时如实显示「本地源码，无法自动更新」。
 - GitHub 源尽力而为比对，取不到时显示「GitHub 源请在插件详情页更新」，不阻断其它插件检查。
 - 可更新行点击「更新」优先复用官方 `pluginManager` 服务的 `updateBundle`（内建失败/取消自动装回原版本，绝不先卸载）；无该 API 时降级为覆盖安装、仅在 `already-installed` 时两阶段并硬保证回滚装回原版本，本地 git 源执行 `git fetch` + `git merge --ff-only`。
+- 更新成功后自动把插件启用态放回（官方 `updateBundle` 只恢复 bundle 选择态，会丢失「已安装插件」页开关所依据的 entry 级 enablement）：优先 `setPluginEnabled`（entry 级），缺失时回退官方同款 `setBundleEnabled`；用户主动关闭的插件尊重其关闭状态，恢复失败不影响更新结论。
 - 禁止更新本包与聚合包自身，跳过 `@deepseek-ai/*` 官方包。
 
 ## 约束

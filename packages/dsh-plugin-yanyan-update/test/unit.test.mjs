@@ -11,6 +11,8 @@ import {
   classifySpec,
   parseUpdateResult,
   updateRegistry,
+  readEnablement,
+  restoreEnablement,
 } from '../lib/index.js';
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -298,4 +300,159 @@ test('updateRegistry：无可用官方管理器时提示手动更新且原版本
   assert.equal(result.restored, true);
   assert.equal(fetched, 0, '应尽早返回，不做任何安装或卸载动作');
   assert.match(result.message, /原版本未改动/);
+});
+
+// ───────────── 更新后启用态恢复：修复「更新完默认关闭」 ─────────────
+// 对应关系：listPlugins 的 entry 级 enabled = 「已安装插件」页开关本体；
+// 官方 updateBundle 只恢复 bundle 选择态，entry 级开关在 remove→install 后丢失。
+
+function enablementManager(overrides) {
+  const calls = [];
+  const manager = Object.assign({
+    listPlugins: async () => ([{ entryId: 'loader/foo', moduleName: 'foo', enabled: true }]),
+    setPluginEnabled: async (id, enabled) => { calls.push(['setPluginEnabled', id, enabled]); },
+    setBundleEnabled: async (name, enabled) => { calls.push(['setBundleEnabled', name, enabled]); },
+    updateBundle: async () => ({
+      from: '1.0.0', to: '2.0.0', step: 'install',
+      result: { application: 'applied', changed: true },
+    }),
+  }, overrides || {});
+  return { manager, calls };
+}
+
+test('readEnablement：优先 listPlugins 的 entry 级 enabled 并携带 entryId', async () => {
+  let r = await readEnablement({ listPlugins: async () => ([
+    { entryId: 'loader/foo', moduleName: 'foo', enabled: true },
+  ]) }, 'foo');
+  assert.equal(r.wasDisabled, false);
+  assert.equal(r.entryId, 'loader/foo');
+
+  // 用户主动关闭：明确 enabled === false
+  r = await readEnablement({ listPlugins: async () => ([
+    { entryId: 'loader/foo', moduleName: 'foo', enabled: false },
+  ]) }, 'foo');
+  assert.equal(r.wasDisabled, true);
+
+  // remote proxy 形态 { value: [...] }
+  r = await readEnablement({ listPlugins: async () => ({ value: [
+    { entryId: 'loader/foo', moduleName: 'foo', enabled: true },
+  ] }) }, 'foo');
+  assert.equal(r.entryId, 'loader/foo');
+});
+
+test('readEnablement：无 listPlugins 时回退 listBundles，异常/缺失一律按开启', async () => {
+  let r = await readEnablement({ listBundles: async () => ([{ name: 'foo', enabled: false }]) }, 'foo');
+  assert.equal(r.wasDisabled, true, 'bundle 明确关闭应尊重');
+
+  r = await readEnablement({ listBundles: async () => ([{ name: 'foo', enabled: true }]) }, 'foo');
+  assert.equal(r.wasDisabled, false);
+
+  // 读方法抛错 / 完全无方法 → 默认按开启，不阻断更新
+  r = await readEnablement({ listPlugins: async () => { throw new Error('boom'); } }, 'foo');
+  assert.equal(r.wasDisabled, false);
+  r = await readEnablement({}, 'foo');
+  assert.equal(r.wasDisabled, false);
+  assert.equal(r.entryId, null);
+});
+
+test('restoreEnablement：优先 setPluginEnabled(entryId, true)，无则回退 setBundleEnabled', async () => {
+  let { manager, calls } = enablementManager();
+  await restoreEnablement(manager, 'foo', { wasDisabled: false, entryId: 'loader/foo' });
+  assert.deepEqual(calls, [['setPluginEnabled', 'loader/foo', true]]);
+
+  // 无 entryId 时用包名
+  ({ manager, calls } = enablementManager());
+  await restoreEnablement(manager, 'foo', { wasDisabled: false, entryId: null });
+  assert.deepEqual(calls, [['setPluginEnabled', 'foo', true]]);
+
+  // 无 setPluginEnabled → 回退官方同款 setBundleEnabled
+  ({ manager, calls } = enablementManager({ setPluginEnabled: undefined }));
+  await restoreEnablement(manager, 'foo', { wasDisabled: false, entryId: null });
+  assert.deepEqual(calls, [['setBundleEnabled', 'foo', true]]);
+
+  // setPluginEnabled 抛错（如传包名触发 unknown-plugin）→ 回退 setBundleEnabled
+  ({ manager, calls } = enablementManager({
+    setPluginEnabled: async () => { throw new Error('unknown-plugin'); },
+  }));
+  await restoreEnablement(manager, 'foo', { wasDisabled: false, entryId: null });
+  assert.deepEqual(calls, [['setBundleEnabled', 'foo', true]]);
+
+  // 无任何 set 方法 → 静默跳过，不抛错
+  await restoreEnablement({}, 'foo', { wasDisabled: false, entryId: null });
+});
+
+test('restoreEnablement：用户主动关闭(wasDisabled)时不恢复；恢复异常被吞掉', async () => {
+  let { manager, calls } = enablementManager();
+  await restoreEnablement(manager, 'foo', { wasDisabled: true, entryId: 'loader/foo' });
+  assert.deepEqual(calls, [], '用户主动关闭的插件不得被强行打开');
+
+  // 两种恢复方法都抛错也不得冒泡
+  ({ manager } = enablementManager({
+    setPluginEnabled: async () => { throw new Error('x'); },
+    setBundleEnabled: async () => { throw new Error('y'); },
+  }));
+  await restoreEnablement(manager, 'foo', { wasDisabled: false, entryId: null });
+});
+
+test('updateRegistry：updateBundle 成功后恢复启用态，且不影响更新结论', async () => {
+  const { manager, calls } = enablementManager();
+  const result = await updateRegistry({}, 'foo', CFG, DEPS, mockIo(manager));
+  assert.equal(result.ok, true);
+  assert.equal(result.updated, true);
+  assert.match(result.message, /已即时生效/);
+  assert.deepEqual(calls, [['setPluginEnabled', 'loader/foo', true]]);
+});
+
+test('updateRegistry：用户主动关闭的插件更新后不恢复启用态', async () => {
+  const { manager, calls } = enablementManager({
+    listPlugins: async () => ([{ entryId: 'loader/foo', moduleName: 'foo', enabled: false }]),
+  });
+  const result = await updateRegistry({}, 'foo', CFG, DEPS, mockIo(manager));
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, []);
+});
+
+test('updateRegistry：恢复启用态抛错不影响更新成功结论', async () => {
+  const { manager } = enablementManager({
+    setPluginEnabled: async () => { throw new Error('unknown-plugin'); },
+    setBundleEnabled: async () => { throw new Error('boom'); },
+  });
+  const result = await updateRegistry({}, 'foo', CFG, DEPS, mockIo(manager));
+  assert.equal(result.ok, true, '恢复失败不得把成功更新误报为失败');
+  assert.equal(result.updated, true);
+  assert.match(result.message, /已即时生效/);
+});
+
+test('updateRegistry：旧 mock（无任何 list*/set* 方法）更新成功照常通过', async () => {
+  const manager = {
+    updateBundle: async () => ({
+      from: '1.0.0', to: '2.0.0', step: 'install',
+      result: { application: 'applied', changed: true },
+    }),
+  };
+  const result = await updateRegistry({}, 'foo', CFG, DEPS, mockIo(manager));
+  assert.equal(result.ok, true, '新方法全部可选，旧形态管理器必须兼容');
+});
+
+test('updateRegistry：降级两阶段成功也恢复启用态', async () => {
+  const mgr = twoPhaseManager(true);
+  // twoPhaseManager 目标二次安装失败，这里改成全成功以走成功出口
+  let targetCalls = 0;
+  const manager = {
+    listPlugins: async () => ([{ entryId: 'loader/foo', moduleName: 'foo', enabled: true }]),
+    setPluginEnabled: async (id, enabled) => { mgr.calls.push(['setPluginEnabled', id, enabled]); },
+    removeBundle: async (id) => { mgr.calls.push(['removeBundle', id]); return { application: 'applied' }; },
+    installBundle: async (spec) => {
+      mgr.calls.push(['installBundle', spec]);
+      if (spec === 'foo@2.0.0') {
+        targetCalls += 1;
+        if (targetCalls === 1) return { error: { code: 'already-installed' } };
+        return { application: 'applied', changed: true };
+      }
+      return { application: 'applied', changed: true };
+    },
+  };
+  const result = await updateRegistry({}, 'foo', CFG, DEPS, mockIo(manager));
+  assert.equal(result.ok, true);
+  assert.ok(mgr.calls.some((c) => c[0] === 'setPluginEnabled' && c[1] === 'loader/foo' && c[2] === true));
 });

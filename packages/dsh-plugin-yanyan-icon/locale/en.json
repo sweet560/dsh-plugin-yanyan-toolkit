@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Icon Generator",
+    "description": "Center-crop an uploaded image and generate an icon.svg fitted for the plugin list artwork slot"
+  }
+}

@@ -57,6 +57,8 @@
         cleanIdle: '清理全部空闲',
         cleaning: '清理中…',
         cleanDone: '已清理 {count} 个空闲子智能体',
+        cleanNoIdle: '当前没有可清理的空闲子智能体',
+        manualCleanHint: '手动清理不受空闲阈值限制；阈值仅用于定时自动清理',
         failed: '失败',
         close: '关闭',
         rename: '重命名标签',
@@ -102,6 +104,8 @@
         cleanIdle: 'Clean All Idle',
         cleaning: 'Cleaning...',
         cleanDone: 'Cleaned {count} idle subagents',
+        cleanNoIdle: 'No idle subagents to clean',
+        manualCleanHint: 'Manual clean ignores the idle threshold; the threshold applies to auto-clean only',
         failed: 'Failed',
         close: 'Close',
         rename: 'Rename Tab',
@@ -204,6 +208,35 @@
         return out;
       }
 
+      // 手动「清理全部空闲」的目标筛选：与 renderRow 的「空闲」标签、host /cleanup
+      // 的「清理所有非 running」语义对齐。列表里显示为空闲（非运行中）的条目都应能
+      // 被一键清掉，而不是要求 activity==='inactive' 且空闲满 idleMinutes —— 官方
+      // catalog 行根本没有 idleSince / lastActiveAt 字段，客户端 firstSeen 又是打开
+      // 浮层后才起步，套阈值会让按钮几乎永远「已清理 0 个空闲子智能体」。
+      // 排除：非对象、无 id、diagnostic、running、rootId 自身、已在隐藏清单里的 id。
+      // 不套 idleMinutes 阈值：阈值只约束定时自动清理（autoCleanTick）。
+      function manualCleanTargets(rows, options) {
+        var opts = options || {};
+        var rootId = opts.rootId;
+        var isHidden = typeof opts.isHidden === 'function' ? opts.isHidden : function () { return false; };
+        var out = [];
+        var list = Array.isArray(rows) ? rows : [];
+        for (var i = 0; i < list.length; i++) {
+          var row = list[i];
+          if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+          if (row.kind === 'diagnostic') continue;
+          if (row.activity === 'running') continue;
+          // 主键统一用 row.id：parseCatalogLocal 已给每行补齐 id，且与 renderRow /
+          // deleteOne / onRowDelete 用同一个主键，避免「选中了却删不掉」。
+          var id = row.id;
+          if (!id || typeof id !== 'string') continue;
+          if (rootId != null && (id === rootId || coreId(id) === coreId(rootId))) continue;
+          if (isHidden(id) || (row.childId && isHidden(row.childId))) continue;
+          out.push(row);
+        }
+        return out;
+      }
+
       function readLS(key) {
         try { return root.localStorage.getItem(key); } catch (e) { return null; }
       }
@@ -259,6 +292,55 @@
           out.push(r);
         }
         return out;
+      }
+
+      // 根治「删不掉」：官方「N 个子智能体」浮层 SubagentHeaderLineage 只读
+      // client 内存 store `projectionsBySession[*].values.subagentCatalog`。宿主对
+      // 已加载的 live 父会话复用内存 fold state，改磁盘日志 / 删 projcache 都不会
+      // 让它重算 —— 这正是残留行「磁盘已干净却仍显示」的真正原因。本函数把
+      // 持久化隐藏清单（LS_DELETED）同样应用到这份内存投影：命中已删除 id 的
+      // catalog 条目直接剔除，并用 list.set 写回同一个 store（宿主的 projectList /
+      // publishRetention 自己就用 list.set，是合法写入口）。
+      // 幂等收敛：写回后再触发 subscribe 时已无命中，不再 set，不会自激循环；
+      // manager 的 projectList 若把旧值重新 set 回来，紧随的 subscribe 会再次剔除。
+      function patchProjections(ctx) {
+        try {
+          var hidden = readDeletedIds();
+          if (!hidden.length) return;
+          var list = ctx.sessions && ctx.sessions.list;
+          if (!list || typeof list.getSnapshot !== 'function' || typeof list.set !== 'function') return;
+          var snap = list.getSnapshot();
+          var projections = snap && snap.projectionsBySession;
+          if (!projections || typeof projections !== 'object') return;
+          var merged = null;
+          for (var sid in projections) {
+            if (!Object.prototype.hasOwnProperty.call(projections, sid)) continue;
+            var proj = projections[sid];
+            var values = proj && proj.values;
+            var catalog = values && values.subagentCatalog;
+            if (!Array.isArray(catalog)) continue;
+            var kept = [], changed = false;
+            for (var i = 0; i < catalog.length; i++) {
+              var e = catalog[i];
+              var cid = e && coreId(e.id || e.childId);
+              if (cid && hidden.indexOf(cid) !== -1) { changed = true; continue; }
+              kept.push(e);
+            }
+            if (!changed) continue;
+            if (!merged) {
+              merged = {};
+              for (var k in projections) {
+                if (Object.prototype.hasOwnProperty.call(projections, k)) merged[k] = projections[k];
+              }
+            }
+            // 浅拷贝：保留 state/error 等字段与 values 里其它投影键。
+            merged[sid] = Object.assign({}, proj, {
+              values: Object.assign({}, values, { subagentCatalog: kept }),
+            });
+          }
+          if (!merged) return; // 本轮无命中，不写回（幂等收敛）
+          list.set(Object.assign({}, snap, { projectionsBySession: merged }));
+        } catch (e) {}
       }
 
       // 服务懒查：一律走 ctx.get / ctx.reflect.get / ctx[name]，不读未 inject 的属性。
@@ -476,13 +558,17 @@
         // 读取 host /config 补齐本地从未存过的缺省值（标签文字等配置可读）。
         return postJson(ROUTE_BASE + '/config', {})
           .then(function (data) {
-            // 一次性迁移清单（旧版归档残留）：并入持久化隐藏清单，
-            // 防止 append-only catalog 重建后这些幽灵条目重新出现。
-            // 放在 cfg 检查之前，保证即便 /config 只回清单也能生效。
-            if (data && Array.isArray(data.legacyHiddenIds)) {
-              for (var k = 0; k < data.legacyHiddenIds.length; k++) {
-                var lid = data.legacyHiddenIds[k];
-                if (typeof lid === 'string' && lid) markDeleted(lid);
+            // host 下发的隐藏清单：一次性迁移（legacyHiddenIds）+ 全库已退休
+            // （hiddenIds，扫全库 zstd 日志里的 subagent-delete/retired 得到）。
+            // 并入持久化隐藏清单 LS_DELETED；随后 patchProjections 会据此持续
+            // 过滤官方浮层所读的内存投影。放在 cfg 检查之前，保证即便 /config
+            // 只回清单也能生效。
+            if (data) {
+              var hidden = [];
+              if (Array.isArray(data.hiddenIds)) hidden = hidden.concat(data.hiddenIds);
+              if (Array.isArray(data.legacyHiddenIds)) hidden = hidden.concat(data.legacyHiddenIds);
+              for (var k = 0; k < hidden.length; k++) {
+                if (typeof hidden[k] === 'string' && hidden[k]) markDeleted(hidden[k]);
               }
             }
             var cfg = data && data.config;
@@ -499,14 +585,6 @@
             if (interval === null && Number.isFinite(cfg.checkIntervalMin)) {
               shared.checkIntervalMin = clampInt(cfg.checkIntervalMin, 1, 1440, 1);
               shared.autoDraft.checkIntervalMin = shared.checkIntervalMin;
-            }
-            // host 下发的一次性迁移清单（旧版归档残留）：并入持久化隐藏清单，
-            // 防止 append-only catalog 重建后这些幽灵条目重新出现。
-            if (Array.isArray(data.legacyHiddenIds)) {
-              for (var k = 0; k < data.legacyHiddenIds.length; k++) {
-                var lid = data.legacyHiddenIds[k];
-                if (typeof lid === 'string' && lid) markDeleted(lid);
-              }
             }
           })
           .catch(function () {});
@@ -535,6 +613,9 @@
             }
             // 删除已落地：写入持久化隐藏清单，并从当前列表立即移除该行。
             markDeleted(id);
+            // 立即把该 id 从官方浮层所读的内存投影里抹掉（不等 refreshProjections，
+            // 因为 live 父会话不会重算磁盘；幂等收敛，见 patchProjections 注释）。
+            patchProjections(ctx);
             shared.rows = filterDeleted(shared.rows);
             shared.rowStatus[id] = { state: 'deleted' };
             // host 已把父会话日志里的 catalog 行原位退休（append-only 根治），
@@ -588,13 +669,20 @@
       }
 
       function cleanAllIdle(ctx) {
-        var targets = idleFilterLocal(filterDeleted(shared.rows), {
+        // 手动清理：清掉列表里所有显示为空闲（非运行中）的条目，不套 idleMinutes
+        // 阈值（阈值只用于定时自动清理）。见 manualCleanTargets 注释：旧实现要求
+        // activity==='inactive' 且空闲 ≥30 分钟，而官方 catalog 无 idleSince 字段、
+        // 客户端 firstSeen 刚起步，导致按钮几乎永远「已清理 0 个」。
+        var targets = manualCleanTargets(filterDeleted(shared.rows), {
           rootId: shared.rootId,
-          idleMinutes: shared.idleMinutes,
-          now: Date.now(),
-          idleSince: idleSince,
+          isHidden: isDeleted,
         });
-        shared.cleanStatus = targets.length ? t('cleaning') : '';
+        if (!targets.length) {
+          shared.cleanStatus = t('cleanNoIdle');
+          renderAll();
+          return Promise.resolve();
+        }
+        shared.cleanStatus = t('cleaning');
         renderAll();
         var chain = Promise.resolve();
         var count = 0;
@@ -809,7 +897,10 @@
       function updateView(view) {
         var refs = view.refs;
         refs.settings.style.display = view.expandedSettings ? '' : 'none';
-        refs.threshold.textContent = t('idleThreshold') + ' ' + shared.idleMinutes + ' ' + t('minutes');
+        // 阈值只约束定时自动清理，手动「清理全部空闲」不受其限制，明确告知用户，
+        // 避免误以为「空闲 0 分钟 / 未满阈值」就是清理按钮没反应的原因。
+        refs.threshold.textContent = t('idleThreshold') + ' ' + shared.idleMinutes + ' '
+          + t('minutes') + ' · ' + t('manualCleanHint');
         refs.result.textContent = shared.cleanStatus || '';
         refs.settingsStatus.textContent = shared.settingsStatus || '';
         // 回填设置输入（骨架不重建，避免覆盖用户正在输入的值时丢焦点）。
@@ -879,7 +970,10 @@
       }
 
       // ───────────────── React 路径（slots + createPortal） ─────────────────
-      var canReact = !!(React && React.createElement && React.useState && React.useEffect && React.useRef);
+      // React.Fragment 是 Fix 1 的前提：用它把 <button> 与 portal 并列成兄弟，
+      // 断开「浮层点击 → fiber 上溯到 button → toggle 关闭」的事件链。
+      // 缺少 Fragment 时直接走纯 DOM 降级（native overlay），不复发该 bug。
+      var canReact = !!(React && React.createElement && React.useState && React.useEffect && React.useRef && React.Fragment);
       var canPortal = !!(ReactDOM && ReactDOM.createPortal);
 
       function PortalHost(props) {
@@ -895,7 +989,21 @@
             try { if (ref.current) ref.current.innerHTML = ''; } catch (e) {}
           };
         }, []);
-        return React.createElement('div', { ref: ref, className: 'yanyan-portal-host' });
+        // 双保险：浮层内所有事件都不再向外冒泡。即便宿主换了 React 版本或把
+        // portal 重新挂成 <button> 的后代，合成事件沿 fiber 上溯时也会在这里被
+        // 截断，不会触发顶部按钮的 onClick toggle。只用 stopPropagation、绝不
+        // preventDefault，输入框聚焦 / 勾选 / 按钮点击等原生行为完全不受影响。
+        var swallow = function (ev) {
+          if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        };
+        return React.createElement('div', {
+          ref: ref,
+          className: 'yanyan-portal-host',
+          onClick: swallow,
+          onMouseDown: swallow,
+          onPointerDown: swallow,
+          onTouchStart: swallow,
+        });
       }
 
       // ActionButton 组件只创建一次：槽的 render 工厂每次返回新组件类型会反复
@@ -915,18 +1023,26 @@
             if (canPortal) setOpen(function (v) { return !v; });
             else toggleOverlayNative(ctx);
           };
-          var kids = [React.createElement('span', { key: 't' }, lbl || t('tab'))];
-          if (open && canPortal) {
-            kids.push(ReactDOM.createPortal(
-              React.createElement(PortalHost, { ctx: ctx }), doc.body));
-          }
-          return React.createElement('button', {
+          // 关键：portal 必须与 <button> 是「兄弟」，不能是它的 children。
+          // 旧实现把 createPortal(...) 塞进 <button> 的 kids，React 合成事件沿
+          // fiber 树（不是 DOM 树）冒泡时，浮层内任意点击都会上溯到这个 button，
+          // 触发 onClick → setOpen(!v) → 浮层被 toggle 卸载：点「设置」/「重命名」
+          // 输入框「直接退出」，点「清理全部空闲」清完却立刻关闭看不见结果。
+          // 用 Fragment 并列后，portal 的 fiber 父级是 Fragment，链路不再经过 button；
+          // DOM 上浮层依旧 createPortal 到 document.body，位置与样式完全不变。
+          var tabBtn = React.createElement('button', {
             'data-dsh-plugin': 'yanyan-subagent',
             'data-dsh-part': 'session-tab',
             className: 'yanyan-tab-btn',
             title: t('title'),
             onClick: onClick,
-          }, kids);
+          }, React.createElement('span', null, lbl || t('tab')));
+          var portal = null;
+          if (open && canPortal) {
+            portal = ReactDOM.createPortal(
+              React.createElement(PortalHost, { ctx: ctx }), doc.body);
+          }
+          return React.createElement(React.Fragment, null, tabBtn, portal);
         };
       }
 
@@ -1152,8 +1268,9 @@
 
         try { injectStyles(ctx); } catch (e) {}
 
-        // 设置（异步读取 host /config 补齐缺省值）。
-        loadSettings(ctx).then(function () { renderAll(); });
+        // 设置（异步读取 host /config 补齐缺省值 + 全库已退休隐藏清单）。
+        // 隐藏清单到位后立即过滤官方浮层所读的内存投影，首屏就不会再显示幽灵行。
+        loadSettings(ctx).then(function () { patchProjections(ctx); renderAll(); });
 
         // 顶部标签（决定性 Slot）。绝不复用官方 subagent-catalog id；官方 order=10，
         // 用 12 排在旁边。slots 不可用或 React 不可用时降级纯 DOM 按钮。
@@ -1195,10 +1312,17 @@
 
           // 订阅 sessions.list 数据变化，触发重渲染（只重读快照，不主动
           // refreshProjections，避免订阅回调自激循环）。
+          // 同时持续把隐藏清单应用到内存投影：宿主对 live 父会话复用内存
+          // fold state，推送帧 / projectList 随时可能把含残留行的 subagentCatalog
+          // 重新 set 回来，必须在每次快照变化后立刻剔除（幂等收敛，无命中不写回）。
           try {
             var list = ctx.sessions && ctx.sessions.list;
             if (list && typeof list.subscribe === 'function') {
-              var sub = list.subscribe(function () { if (!disposed) refresh(ctx, false); });
+              var sub = list.subscribe(function () {
+                if (disposed) return;
+                patchProjections(ctx);
+                refresh(ctx, false);
+              });
               unsubs.push(function () {
                 try {
                   if (typeof sub === 'function') sub();

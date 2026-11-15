@@ -1,4 +1,4 @@
-// 跨包集成校验：三个功能插件 + 自身行的装载前提逐项核对。
+// 跨包集成校验：四个功能插件 + 自身行的装载前提逐项核对。
 // 不联网、不依赖第三方 YAML 库；只用 node 内置模块。
 
 import { test } from 'node:test';
@@ -11,6 +11,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHILDREN = [
   'packages/dsh-plugin-yanyan-update',
   'packages/dsh-plugin-yanyan-subagent',
+  'packages/dsh-plugin-yanyan-icon',
 ];
 
 function readJson(rel) {
@@ -58,7 +59,7 @@ test('每个功能插件的 host / client 半区与展示元数据齐备', () =>
 test('各行 name 严格等于对应包 package.json 的 name', () => {
   const text = readFileSync(join(root, 'cordis.patch.yml'), 'utf8');
   const names = [...text.matchAll(/^\s+name:\s*'([^']+)'\s*$/gm)].map((m) => m[1]);
-  assert.equal(names.length, 4, '应有 4 行 name');
+  assert.equal(names.length, 5, '应有 5 行 name');
   assert.equal(readJson('package.json').name, 'dsh-plugin-yanyan-toolkit');
   assert.ok(names.includes('dsh-plugin-yanyan-toolkit'), '自身行 name');
   for (const dir of CHILDREN) {

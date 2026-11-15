@@ -8,6 +8,7 @@ The first plugin of the "Yanyan Toolkit" aggregate bundle. It places a "Check up
 - Local plugins (`link:` / `file:`): for git repositories, fetch and compare local HEAD with `origin/<branch>`; without `.git`, honestly report "local source, cannot auto-update".
 - GitHub sources are best-effort; when they cannot be compared they are reported as "update GitHub sources on the plugin detail page" without blocking other checks.
 - Updatable rows prefer the official `pluginManager` service `updateBundle` (built-in automatic restore on failure/cancel, never removes first); when that API is absent it falls back to an over-install and only uses a two-phase remove+install when `already-installed`, with a hard guarantee of restoring the original version. Local git sources run `git fetch` + `git merge --ff-only`.
+- After a successful update the plugin's enablement is restored (the official `updateBundle` only restores bundle selection and loses the entry-level enablement that the "Installed plugins" toggle reads): `setPluginEnabled` (entry-level) is preferred, falling back to the official-style `setBundleEnabled`; plugins the user deliberately disabled stay disabled, and a failed restore never changes the update result.
 - This package and the aggregate package are never updated; official `@deepseek-ai/*` packages are skipped.
 
 ## Constraints

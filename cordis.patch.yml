@@ -1,7 +1,7 @@
-# 研研工具包：一个 bundle 挂载四条 loader 行 —— 自身元数据行 + 三个功能插件行。
+# 研研工具包：一个 bundle 挂载五条 loader 行 —— 自身元数据行 + 四个功能插件行。
 # 每行 name 必须互不相同且恰好等于对应包的 package.json name，否则
 # dsh-client-modules 会报 duplicate factory registration。
-# 三个功能插件各有独立 id，安装后可由用户在插件页单独启停。
+# 四个功能插件各有独立 id，安装后可由用户在插件页单独启停。
 - insert:
     # 自身行：只承载健康检查路由与空 client 壳，不贡献任何 UI。
     - id: yanyan-toolkit-compat
@@ -33,3 +33,11 @@
         autoCleanEnabled: false
         idleMinutes: 30
         checkIntervalMin: 1
+
+    # 插件四「图标生成」：上传图片居中裁切、生成适配插件列表图标位的 icon.svg。
+    - id: dsh-plugin-yanyan-icon
+      name: 'dsh-plugin-yanyan-icon'
+      config:
+        radius: 14
+        padding: 4
+        borderWidth: 1

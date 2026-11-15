@@ -380,3 +380,32 @@ export function scrubCatalogRows(dshHome, parentSessionId, everywhere = false) {
   const result = rewriteCatalogRows(dshHome, parentSessionId, gone);
   return { files: result.removed > 0 ? [{ parentId: parentSessionId, removed: result.removed }] : [], removed: result.removed, ok: result.ok, reason: result.reason };
 }
+
+/**
+ * 扫全库 zstd 会话日志，收集所有已被「原位退休」的 childId（核心 id）。
+ *
+ * 用途：官方「N 个子智能体」浮层读的是宿主进程内存里的 live 投影 fold state，
+ * 改磁盘日志 / 删 projcache 都不会让已经加载的父会话重算，残留行因此「删不掉」。
+ * host 把这份「全库已退休清单」经 /config 下发给 client，client 据此持续过滤
+ * 内存投影 projectionsBySession，才能真正让官方浮层里的幽灵行消失。
+ * 日志是 append-only 真相源：凡 `type === 'subagent-delete/retired'` 的 data.childId
+ * 都曾被此插件删除过，重开 GUI 后也必须继续隐藏。
+ */
+export function collectRetiredIds(dshHome) {
+  const ids = new Set();
+  for (const entry of allSessionLogPaths(dshHome)) {
+    let text;
+    try { text = decodeLog(readFileSync(entry.logPath)); } catch (error) { continue; }
+    // 预筛：整份日志里没有退休标记就跳过逐行 JSON.parse，省掉绝大多数开销。
+    if (text.indexOf('subagent-delete/retired') === -1) continue;
+    for (const line of text.split('\n')) {
+      if (line.indexOf('"subagent-delete/retired"') === -1) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch (error) { continue; }
+      if (ev && ev.type === 'subagent-delete/retired' && ev.data && ev.data.childId) {
+        ids.add(logCoreId(ev.data.childId));
+      }
+    }
+  }
+  return [...ids];
+}

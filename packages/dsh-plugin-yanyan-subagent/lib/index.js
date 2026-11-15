@@ -28,10 +28,20 @@ import {
   readCatalogEvents, allSessionLogPaths, retireCatalogRow,
   retireCatalogRowsEverywhere, scrubCatalogRows, flushPendingRewrites,
   pendingFilePath, dropProjectionCache, queueCatalogRetire,
+  collectRetiredIds,
 } from './log-rewrite.js';
 
 export const name = 'dsh-plugin-yanyan-subagent';
-export const VERSION = '1.2.0';
+// 版本从子包自身 package.json 动态读取，避免 bump 时与硬编码常量失同步
+// （与聚合根包 lib/index.js 的 VERSION 同源策略，readFileSync 已在上方导入）。
+function readOwnVersion() {
+  try {
+    return String(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '0.0.0');
+  } catch (error) {
+    return '0.0.0';
+  }
+}
+export const VERSION = readOwnVersion();
 
 // 顶层硬依赖只保留路由与准入所必需的；模型工具通过可选的 ctx.inject(['tools'])
 // 注册，没有该服务时静默降级，绝不影响下面这些 HTTP 路由的加载。
@@ -458,12 +468,36 @@ export function legacyHiddenIds() {
   }
 }
 
-function makeConfigHandler(ctx, cfg) {
+/**
+ * 全库「应被隐藏」清单 = 一次性迁移清单 ∪ 日志里所有已原位退休的 childId。
+ *
+ * 关键：官方「N 个子智能体」浮层读宿主进程内存里的 live 投影，磁盘日志改写 /
+ * 删 projcache 都不会让已加载的父会话重算，残留行因此删不掉。重开 GUI 后，只要
+ * 这些 id 仍在日志的 `subagent-delete/retired` 事件里，就必须继续隐藏 —— 故在
+ * 启动 /config 时把它们一并发给 client，由 client 持续过滤内存投影。
+ * 纯函数（dshHome 显式传参），便于单测。
+ */
+export function collectHiddenIds(dshHome) {
+  const ids = new Set(legacyHiddenIds());
+  if (dshHome) {
+    try {
+      for (const id of collectRetiredIds(dshHome)) ids.add(coreId(id));
+    } catch (error) { /* 单份日志损坏不影响其余清单 */ }
+  }
+  return [...ids];
+}
+
+function makeConfigHandler(ctx, cfg, hiddenIds) {
   return async function configHandler(req, res) {
     if (!guard(req, res, ctx)) return;
     const payload = await parsePayload(req, res, ['POST']);
     if (payload === null) return;
-    respond(res, 200, { ok: true, config: cfg, legacyHiddenIds: legacyHiddenIds() });
+    respond(res, 200, {
+      ok: true,
+      config: cfg,
+      legacyHiddenIds: legacyHiddenIds(),
+      hiddenIds: hiddenIds || [],
+    });
   };
 }
 
@@ -919,9 +953,16 @@ function collectLiveIds(ctx) {
 export function apply(ctx, config) {
   const cfg = normalizeConfig(config);
   const deleteHandler = makeDeleteHandler(ctx);
+  // 启动时一次性扫全库日志算出「全库已退休清单」，随 /config 下发给 client，
+  // 用于持续过滤官方浮层所读的内存投影（根治 live 会话不重算磁盘的问题）。
+  let hiddenIds = [];
+  try {
+    const dshHome = resolveDshHome(ctx);
+    hiddenIds = collectHiddenIds(dshHome);
+  } catch (error) { /* 不影响路由注册 */ }
   const routes = [
     { path: HEALTH_ROUTE, handler: makeHealthHandler(ctx) },
-    { path: CONFIG_ROUTE, handler: makeConfigHandler(ctx, cfg) },
+    { path: CONFIG_ROUTE, handler: makeConfigHandler(ctx, cfg, hiddenIds) },
     { path: LIST_ROUTE, handler: makeListHandler(ctx) },
     { path: CATALOG_ROUTE, handler: makeCatalogHandler(ctx) },
     { path: ARCHIVE_ROUTE, handler: deleteHandler },
