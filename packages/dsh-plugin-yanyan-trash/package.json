@@ -1,0 +1,32 @@
+{
+  "name": "dsh-plugin-yanyan-trash",
+  "version": "1.0.0",
+  "description": "会话回收站：移入回收站（可恢复）、彻底删除、会话树级联删除、批量操作；与官方会话归档并行，不接管旧列表。",
+  "type": "module",
+  "main": "lib/index.js",
+  "icon": "icon.svg",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml", "icon.svg", "locale/en.json", "locale/zh.json", "README.md", "README.zh.md"],
+  "keywords": ["deepseek-harness", "dsh-plugin", "session-trash", "recycle-bin", "cordis"],
+  "author": "sweet560",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sweet560/dsh-plugin-yanyan-toolkit.git",
+    "directory": "packages/dsh-plugin-yanyan-trash"
+  },
+  "engines": { "node": "^22.19.0 || >=24.0.0" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dsh": {
+    "engines": { "dsh": ">=0.2.2-rc.2" },
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "inject": ["slots", "locale", "connection"], "platform": "web" },
+    "manifestVersion": 1
+  }
+}

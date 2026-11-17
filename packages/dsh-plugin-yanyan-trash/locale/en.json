@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Recycle Bin",
+    "description": "Recoverable session deletion: move to trash, restore, purge, session-tree cascade delete and batch operations."
+  }
+}

@@ -155,3 +155,311 @@ test('UI_zh / UI_en 键集一致（含新增 cleanNoIdle / manualCleanHint）', 
   assert.ok(zh.includes('cleanNoIdle'));
   assert.ok(zh.includes('manualCleanHint'));
 });
+
+// ───────────────── UI 调整：浮层贴触发按钮 + 按钮对齐「创造模式」 ─────────────────
+
+test('浮层定位：positionOverlay 按锚点按钮实时位置设置内联 left/top', () => {
+  const fn = extractFn(source, 'positionOverlay');
+  assert.match(fn, /getBoundingClientRect\(\)/, '应读取锚点按钮的实时位置');
+  assert.match(fn, /overlayAnchor/, '应以 overlayAnchor 为锚点');
+  assert.match(fn, /left = av\.left/, '水平应让浮层左边缘与按钮左边缘平齐、朝右展开');
+  assert.ok(!/left = av\.right - cw/.test(fn), '不应再右边缘对齐、向左展开');
+  assert.match(fn, /av\.bottom \+ ANCHOR_GAP/, '应优先放在按钮下方');
+  assert.match(fn, /c\.style\.left/, '应设置内联 left');
+  assert.match(fn, /c\.style\.top/, '应设置内联 top');
+  // 旧实现写死右上角，必须消失。
+  assert.ok(!/position:fixed;top:64px;right:24px/.test(source),
+    'CSS 不应再写死 top:64px;right:24px');
+});
+
+test('浮层定位：打开前捕获触发按钮作为锚点（React + 原生降级两条路径）', () => {
+  assert.match(source, /overlayAnchor = btnRef\.current/, 'React 路径应捕获 btnRef.current');
+  assert.match(source, /ref: btnRef/, '按钮应挂 ref 才能拿到 DOM 元素');
+  assert.match(source, /overlayAnchor = btn;/, '原生降级路径应捕获 btn');
+  assert.match(source, /positionOverlay\(view\)/, '挂载后应调用 positionOverlay 定位');
+});
+
+test('浮层定位：视口 resize 时重定位所有已打开浮层', () => {
+  assert.match(source, /addEventListener\('resize', positionAllViews\)/, '应注册 resize 重定位');
+  assert.match(source, /removeEventListener\('resize', positionAllViews\)/, '应在 effect 清理时移除监听');
+});
+
+test('按钮样式：无边框 + 透明背景 + 宿主次级灰字，与「创造模式」一致', () => {
+  const m = source.match(/\.yanyan-tab-btn\{[^}]*\}/);
+  assert.ok(m, '应存在 .yanyan-tab-btn 规则');
+  const rule = m[0];
+  assert.match(rule, /background:transparent/, '背景应透明');
+  assert.match(rule, /border:0(;|\})/, '应无边框');
+  assert.match(rule, /--dsw-alias-label-secondary-foreground/, '应复用宿主次级灰字 token');
+  assert.ok(!/border:1px solid/.test(rule), '不应再有边框');
+});
+
+// ───────────────── 点击空白关闭浮层 ─────────────────
+
+// 在 vm 里用可控桩运行 closeOverlaysFromOutside，覆盖三种点击目标。
+function loadOutsideCloser() {
+  const code = extractFn(source, 'closeOverlaysFromOutside') + '\n'
+    + '\n;({ closeOverlaysFromOutside })';
+  // 用可变 state 对象承载，函数读取时通过 sandbox 全局注入。
+  const sandbox = {
+    views: [],
+    nativeOverlay: null,
+    overlayAnchor: null,
+    closeEmitter: { emitted: 0, emit() { this.emitted += 1; } },
+    closeNativeOverlay() { sandbox.nativeClosed += 1; },
+    nativeClosed: 0,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox, { filename: 'client-outside-close.js' });
+  return {
+    sandbox,
+    run(target, button) {
+      vm.runInContext(
+        'closeOverlaysFromOutside({ target: __target, button: __button })',
+        Object.assign(sandbox, { __target: target, __button: button === undefined ? 0 : button }),
+      );
+    },
+  };
+}
+
+// 构造一个 contains(target) 语义的容器桩。
+function containerWith(child) {
+  return {
+    contains(t) { return t === child || t === this; },
+    innerHTML: '',
+  };
+}
+
+test('点击空白关闭：点浮层内部不关闭（含输入框等所有子元素）', () => {
+  const h = loadOutsideCloser();
+  const inner = { node: 'input' };
+  h.sandbox.views.push({ container: containerWith(inner) });
+  h.run(inner);
+  assert.equal(h.sandbox.closeEmitter.emitted, 0, '浮层内点击不应触发关闭');
+  assert.equal(h.sandbox.nativeClosed, 0);
+});
+
+test('点击空白关闭：点触发按钮本身不关闭（交给 toggle，避免先关后开）', () => {
+  const h = loadOutsideCloser();
+  const anchor = containerWith({});
+  h.sandbox.overlayAnchor = anchor;
+  // 没有任何浮层时函数会提前返回；放一个与本 target 无关的浮层。
+  h.sandbox.views.push({ container: containerWith({ node: 'other' }) });
+  h.run(anchor);
+  assert.equal(h.sandbox.closeEmitter.emitted, 0, '点按钮不应由空白关闭逻辑处理');
+  assert.equal(h.sandbox.nativeClosed, 0);
+});
+
+test('点击空白关闭：点浮层/按钮之外的空白区域会关闭（React + 原生两条路径都触发）', () => {
+  const h = loadOutsideCloser();
+  h.sandbox.views.push({ container: containerWith({ node: 'inside' }) });
+  h.sandbox.nativeOverlay = {}; // 模拟有浮层存在
+  const blank = { node: 'blank' };
+  h.run(blank);
+  assert.equal(h.sandbox.closeEmitter.emitted, 1, 'React 路径应 emit 关闭');
+  assert.equal(h.sandbox.nativeClosed, 1, '原生降级路径应直接移除');
+});
+
+test('点击空白关闭：无浮层时点击空白不做任何事', () => {
+  const h = loadOutsideCloser();
+  h.run({ node: 'blank' });
+  assert.equal(h.sandbox.closeEmitter.emitted, 0);
+  assert.equal(h.sandbox.nativeClosed, 0);
+});
+
+test('点击空白关闭：右键（button!==0）不触发关闭', () => {
+  const h = loadOutsideCloser();
+  h.sandbox.views.push({ container: containerWith({ node: 'inside' }) });
+  h.run({ node: 'blank' }, 2);
+  assert.equal(h.sandbox.closeEmitter.emitted, 0, '右键不应关闭浮层');
+});
+
+test('点击空白关闭：事件在 document capture 阶段注册且清理时移除', () => {
+  assert.match(source, /addEventListener\('mousedown', closeOverlaysFromOutside, true\)/,
+    '应以 capture 阶段监听 mousedown');
+  assert.match(source, /removeEventListener\('mousedown', closeOverlaysFromOutside, true\)/,
+    '应在 effect 清理时移除监听');
+});
+
+// ───────────────── hover 弹出 / 移开消失 ─────────────────
+
+test('hover：按钮 mouseenter 打开、mouseleave 延迟关闭（React + 原生两条路径）', () => {
+  const actionBtn = extractFn(source, 'makeActionButton');
+  // React 路径：按钮挂 onMouseEnter/onMouseLeave。
+  assert.match(actionBtn, /onMouseEnter: onEnter/, '按钮应挂 onMouseEnter');
+  assert.match(actionBtn, /onMouseLeave: onLeave/, '按钮应挂 onMouseLeave');
+  assert.match(actionBtn, /cancelHoverClose\(\)/, '进入时应取消待执行的关闭');
+  assert.match(actionBtn, /scheduleHoverClose\(\)/, '移开时应安排延迟关闭');
+  assert.match(actionBtn, /if \(!open\) setOpen\(true\)/, 'hover 打开应只 setOpen(true) 不 toggle');
+  // 原生降级路径：mouseenter/mouseleave 监听。
+  const native = extractFn(source, 'injectNativeTabButton');
+  assert.match(native, /addEventListener\('mouseenter'/, '原生按钮应监听 mouseenter');
+  assert.match(native, /addEventListener\('mouseleave'/, '原生按钮应监听 mouseleave');
+  assert.match(native, /ensureNativeOpen\(ctx, btn\)/, '原生 hover 打开应复用 ensureNativeOpen');
+});
+
+test('hover：浮层 mouseenter 取消关闭、mouseleave 重新计时（PortalHost + 原生 overlay）', () => {
+  const portalFn = extractFn(source, 'PortalHost');
+  assert.match(portalFn, /onMouseEnter: function \(\) \{ if \(props\.onEnter\) props\.onEnter\(\); \}/,
+    'PortalHost 应把浮层 mouseenter 转给 onEnter 取消关闭');
+  assert.match(portalFn, /onMouseLeave: function \(\) \{ if \(props\.onLeave\) props\.onLeave\(\); \}/,
+    'PortalHost 应把浮层 mouseleave 转给 onLeave 重新计时');
+  const nativeFn = extractFn(source, 'toggleOverlayNative');
+  assert.match(nativeFn, /div\.addEventListener\('mouseenter', function \(\) \{ cancelHoverClose\(\); \}\)/,
+    '原生浮层 mouseenter 应取消关闭');
+  assert.match(nativeFn, /div\.addEventListener\('mouseleave', function \(\) \{ scheduleHoverClose\(\); \}\)/,
+    '原生浮层 mouseleave 应重新计时');
+});
+
+test('hover：延迟关闭真实执行 schedule/cancel 语义（含定时器清理）', () => {
+  const sandbox = {
+    root: {
+      setTimeout(fn, ms) { sandbox.lastDelay = ms; sandbox.pending = fn; return 1; },
+      clearTimeout() { sandbox.cleared = true; },
+    },
+    HOVER_CLOSE_DELAY: 200,
+    hoverCloseTimer: null,
+    closeEmitter: { emitted: 0, emit() { this.emitted += 1; } },
+    nativeClosed: 0,
+    closeNativeOverlay() { sandbox.nativeClosed += 1; },
+  };
+  const code = extractFn(source, 'cancelHoverClose') + '\n'
+    + extractFn(source, 'scheduleHoverClose') + '\n'
+    + '\n;({ scheduleHoverClose, cancelHoverClose })';
+  vm.createContext(sandbox);
+  const api = vm.runInContext(code, sandbox, { filename: 'client-hover.js' });
+
+  // schedule：设置延迟 200ms 的定时器。
+  api.scheduleHoverClose();
+  assert.equal(sandbox.lastDelay, 200, '应使用 HOVER_CLOSE_DELAY 延迟');
+  assert.equal(typeof sandbox.pending, 'function', '应注册延迟关闭回调');
+
+  // cancel：清除定时器。
+  sandbox.cleared = false;
+  api.cancelHoverClose();
+  assert.equal(sandbox.cleared, true, 'cancel 应 clearTimeout');
+
+  // 延迟回调真正触发时：emit 关闭 + 关闭原生浮层。
+  api.scheduleHoverClose();
+  sandbox.pending();
+  assert.equal(sandbox.closeEmitter.emitted, 1, '延迟到点应 emit 关闭 React 浮层');
+  assert.equal(sandbox.nativeClosed, 1, '延迟到点应关闭原生浮层');
+});
+
+// ───────────────── 模仿官方「N 个子智能体」浮层样式（图2） ─────────────────
+
+test('按钮 hover：字变黑（随主题前景 token）、无边框、无背景，对齐官方按钮', () => {
+  const m = source.match(/\.yanyan-tab-btn:hover[^{]*\{[^}]*\}/);
+  assert.ok(m, '应存在 .yanyan-tab-btn:hover 规则');
+  const rule = m[0];
+  assert.match(rule, /background:transparent/, 'hover 时仍无背景');
+  assert.match(rule, /border:0(;|\})/, 'hover 时仍无边框');
+  assert.match(rule, /color:var\(--yanyan-fg,#1f2328\)/, 'hover 时用随主题前景（浅色黑/深色白）');
+  assert.ok(!/--dsw-alias-label-primary-foreground/.test(rule),
+    '不能用 --dsw-alias-label-primary-foreground（白字 token，会让字在浅色背景消失）');
+});
+
+test('图2 列表行：绿点 + 双行文字（名称/id·token·耗时）+ 箭头 + 删除 X 结构', () => {
+  const fn = extractFn(source, 'renderRow');
+  assert.match(fn, /yanyan-row-official/, '外层应用图2行样式类');
+  assert.match(fn, /yanyan-row-dot/, '应有状态绿点');
+  assert.match(fn, /data-dsh-part['"]?,\s*['"]row-dot/, '绿点应保留 part 标记');
+  assert.match(fn, /yanyan-row-main/, '应有双行文字容器');
+  assert.match(fn, /yanyan-row-meta/, '第二行应为 id + token · 耗时');
+  assert.match(fn, /rowTokenText\(row\)/, '应探测 token 数');
+  assert.match(fn, /rowDurationText\(row\)/, '应探测耗时');
+  assert.match(fn, /yanyan-row-arrow/, '应有右箭头');
+  assert.match(fn, /onRowDelete\(ctx, row\)/, '删除 X 回调必须保留');
+  assert.match(fn, /data-dsh-part['"]?,\s*['"]row['"]/, '外层 row part 标记必须保留');
+});
+
+test('图2 列表样式：绿点/双行/箭头 CSS 规则存在', () => {
+  for (const cls of ['yanyan-row-official', 'yanyan-row-dot', 'yanyan-row-main',
+    'yanyan-row-meta', 'yanyan-row-arrow']) {
+    assert.ok(source.includes('.' + cls), `应存在 .${cls} 样式规则`);
+  }
+  assert.match(source, /\.yanyan-row-dot\{[^}]*background:#3fb950/, '空闲行应为绿点');
+  assert.match(source, /\.yanyan-row-dot\.is-running\{[^}]*background:#2f6feb/, '运行行应为蓝点');
+});
+
+// vm 真实执行 token / 耗时格式化（纯函数，无 DOM 依赖）。
+function loadFormatters() {
+  const code = extractFn(source, 'formatTokenCount') + '\n'
+    + extractFn(source, 'formatDuration') + '\n'
+    + '\n;({ formatTokenCount, formatDuration })';
+  return vm.runInNewContext(code, {}, { filename: 'client-formatters.js' });
+}
+
+test('图2 指标格式化：token 数与耗时的真实执行', () => {
+  const f = loadFormatters();
+  assert.equal(f.formatTokenCount(21600), '21.6K tok', '大 token 数应转 K');
+  assert.equal(f.formatTokenCount(500), '500 tok', '小 token 数原样');
+  assert.equal(f.formatTokenCount(0), '', '无 token 数返回空');
+  assert.equal(f.formatTokenCount(-1), '', '非法值返回空');
+  assert.equal(f.formatDuration(500), '500ms', '小于 1 秒显示 ms');
+  assert.equal(f.formatDuration(5000), '5秒', '秒级显示');
+  assert.equal(f.formatDuration(65000), '1分5秒', '分钟级显示');
+  assert.equal(f.formatDuration(60000), '1分', '整分钟无尾秒');
+  assert.equal(f.formatDuration(-1), '', '非法值返回空');
+});
+
+// ───────────────── 无子智能体时隐藏「子智能体管理」按钮 ─────────────────
+
+// vm 真实执行 hasSubagents：用可控桩提供 shared / isDeleted。
+function loadHasSubagents() {
+  const code = extractFn(source, 'hasSubagents') + '\n;({ hasSubagents })';
+  const sandbox = {
+    shared: { unsupported: false, rows: [], rootId: '' },
+    deleted: [],
+    isDeleted(id) { return sandbox.deleted.indexOf(id) !== -1; },
+  };
+  vm.createContext(sandbox);
+  const api = vm.runInContext(code, sandbox, { filename: 'client-visibility.js' });
+  return { sandbox, api };
+}
+
+test('按钮显隐：hasSubagents 真实执行（空/诊断/已删除/root 均不算子智能体）', () => {
+  const { sandbox, api } = loadHasSubagents();
+  // 空列表 → 隐藏
+  assert.equal(api.hasSubagents(), false, '无行应判定为无子智能体');
+  // 普通行 → 显示
+  sandbox.shared.rows = [{ id: 'sub-1' }];
+  assert.equal(api.hasSubagents(), true, '有普通子智能体行应显示');
+  // 只有诊断行 → 隐藏
+  sandbox.shared.rows = [{ id: 'diag', kind: 'diagnostic' }];
+  assert.equal(api.hasSubagents(), false, '诊断行不算子智能体');
+  // 只有已删除行 → 隐藏
+  sandbox.shared.rows = [{ id: 'gone' }];
+  sandbox.deleted = ['gone'];
+  assert.equal(api.hasSubagents(), false, '已删除行不算子智能体');
+  // 只有根会话行 → 隐藏
+  sandbox.deleted = [];
+  sandbox.shared.rootId = 'root';
+  sandbox.shared.rows = [{ id: 'root' }];
+  assert.equal(api.hasSubagents(), false, '根会话行不算子智能体');
+  // 数据源不支持 → 保守显示，避免探测失败把入口永久藏掉
+  sandbox.shared.rows = [];
+  sandbox.shared.unsupported = true;
+  assert.equal(api.hasSubagents(), true, 'unsupported 时应保守显示');
+});
+
+test('按钮显隐：refresh 数据到位后推送显隐判定', () => {
+  assert.match(source, /var visibilityEmitter = makeEmitter\(\)/, '应声明 visibilityEmitter');
+  const refresh = extractFn(source, 'refresh');
+  assert.match(refresh, /visibilityEmitter\.emit\(hasSubagents\(\)\)/,
+    'refresh 更新 rows 后应推送显隐状态');
+});
+
+test('按钮显隐：React 路径按钮随状态渲染，隐藏时关闭浮层', () => {
+  const fn = extractFn(source, 'makeActionButton');
+  assert.match(fn, /visibilityEmitter\.subscribe/, 'React 路径应订阅 visibilityEmitter');
+  assert.match(fn, /visible \? React\.createElement\('button'/, '隐藏时按钮应不渲染');
+  assert.match(fn, /if \(!v\) setOpen\(false\)/, '子智能体消失时应一并关闭浮层');
+});
+
+test('按钮显隐：原生降级路径 btn 随状态显隐', () => {
+  const fn = extractFn(source, 'injectNativeTabButton');
+  assert.match(fn, /btn\.style\.display = 'none'/, '初始应先隐藏，避免闪烁');
+  assert.match(fn, /visibilityEmitter\.subscribe/, '原生路径应订阅 visibilityEmitter');
+  assert.match(fn, /btn\.style\.display = v \? '' : 'none'/, '应按显隐状态切换 display');
+});

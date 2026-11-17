@@ -2,7 +2,7 @@
 
 English | [中文](README.md)
 
-> **Current version: v1.4.1** | Requires DSH **0.2.2-rc.2**
+> **Current version: v1.4.2** | Requires DSH **0.2.2-rc.2**
 
 > Repository: [GitHub](https://github.com/sweet560/dsh-plugin-yanyan-toolkit)
 
@@ -21,7 +21,7 @@ Each plugin has its own loader row and can be toggled independently on the Plugi
 
 ## Independent component versions
 
-Every component in the bundle keeps its own independent `package.json` version (the umbrella root and the four plugins can be released independently, no forced lockstep): currently `dsh-plugin-yanyan-toolkit` 1.4.1, `dsh-plugin-yanyan-update` 1.2.1, `dsh-plugin-yanyan-subagent` 1.2.2, `dsh-plugin-yanyan-icon` 1.0.1, `@linxin666/dsh-session-archive` 0.4.18.
+Every component in the bundle keeps its own independent `package.json` version (the umbrella root and the four plugins can be released independently, no forced lockstep): currently `dsh-plugin-yanyan-toolkit` 1.4.2, `dsh-plugin-yanyan-update` 1.2.1, `dsh-plugin-yanyan-subagent` 1.4.0, `dsh-plugin-yanyan-icon` 1.0.1, `@linxin666/dsh-session-archive` 0.4.18.
 
 On the plugin detail page's "Included components" list, a small `v<version>` badge appears next to each component title. The official `InstalledPluginChild` protocol only has `id/name/enabled/locked` and no `version`, so DSH itself never renders per-component versions. The host half adds a `/__dsh-plugin-yanyan-toolkit/components` route that **dynamically reads each component's own `package.json`** (never hardcoded, so versions cannot drift), and the client half reuses the `MutationObserver` + `ctx.effect` injection skeleton from the Plugin Update package: it matches `[data-plugin-rows] li[data-plugin-row]` rows by the real package name in the inline `<code>` and injects the badge. It never mutates React-managed DOM, never touches other plugins' detail pages, and re-attaches automatically after a re-render.
 

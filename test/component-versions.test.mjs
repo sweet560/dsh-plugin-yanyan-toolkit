@@ -32,6 +32,7 @@ const OWN_PKGS = [
   'dsh-plugin-yanyan-update',
   'dsh-plugin-yanyan-subagent',
   'dsh-plugin-yanyan-icon',
+  'dsh-plugin-yanyan-trash',
 ];
 const EXTERNAL_PKG = '@linxin666/dsh-session-archive';
 
@@ -40,14 +41,14 @@ test('VERSION 动态等于根包 package.json 版本（不再写死）', () => {
   assert.match(VERSION, SEMVER);
 });
 
-test('collectVersions 覆盖全部 5 个组件且各自是合法 semver', () => {
+test('collectVersions 覆盖全部 6 个组件且各自是合法 semver', () => {
   const v = collectVersions();
   for (const pkg of [...OWN_PKGS, EXTERNAL_PKG]) {
     assert.ok(Object.prototype.hasOwnProperty.call(v, pkg), `缺少组件 ${pkg}`);
     assert.match(String(v[pkg]), SEMVER, `${pkg} 版本不合法`);
     assert.ok(!/^[\^~>=<]/.test(String(v[pkg])), `${pkg} 不应残留范围前缀`);
   }
-  assert.equal(Object.keys(v).length, 5);
+  assert.equal(Object.keys(v).length, 6);
 });
 
 test('四个自写组件版本精确等于各自 package.json，且互不强制一致', () => {
@@ -65,7 +66,11 @@ test('四个自写组件版本精确等于各自 package.json，且互不强制�
     v['dsh-plugin-yanyan-icon'],
     readJson('packages/dsh-plugin-yanyan-icon/package.json').version,
   );
-  // 聚合包 1.4.1 / update 1.2.1 / subagent 1.2.2 / icon 1.0.1 本就不同，正是「独立版本」。
+  assert.equal(
+    v['dsh-plugin-yanyan-trash'],
+    readJson('packages/dsh-plugin-yanyan-trash/package.json').version,
+  );
+  // 聚合包 1.4.2 / update 1.2.1 / subagent 1.4.0 / icon 1.0.1 / trash 1.0.0 本就不同，正是「独立版本」。
   assert.ok(new Set(OWN_PKGS.map((p) => v[p])).size >= 2);
 });
 
@@ -80,12 +85,13 @@ test('外部组件版本干净：读实装优先，未装时回退声明（去�
   assert.ok(got === declared || SEMVER.test(got));
 });
 
-test('collectVersions(rootDir) 动态读取注入目录，五个版本互不串味', () => {
+test('collectVersions(rootDir) 动态读取注入目录，六个版本互不串味', () => {
   const dir = mkdtempSync(join(tmpdir(), 'yanyan-ver-'));
   try {
     mkdirSync(join(dir, 'packages', 'dsh-plugin-yanyan-update'), { recursive: true });
     mkdirSync(join(dir, 'packages', 'dsh-plugin-yanyan-subagent'), { recursive: true });
     mkdirSync(join(dir, 'packages', 'dsh-plugin-yanyan-icon'), { recursive: true });
+    mkdirSync(join(dir, 'packages', 'dsh-plugin-yanyan-trash'), { recursive: true });
     writeFileSync(join(dir, 'package.json'), JSON.stringify({
       name: 'dsh-plugin-yanyan-toolkit',
       version: '9.9.9',
@@ -103,18 +109,23 @@ test('collectVersions(rootDir) 动态读取注入目录，五个版本互不串�
       join(dir, 'packages', 'dsh-plugin-yanyan-icon', 'package.json'),
       JSON.stringify({ version: '4.4.4' }),
     );
+    writeFileSync(
+      join(dir, 'packages', 'dsh-plugin-yanyan-trash', 'package.json'),
+      JSON.stringify({ version: '5.5.5' }),
+    );
 
     const v = collectVersions(dir);
     assert.equal(v['dsh-plugin-yanyan-toolkit'], '9.9.9');
     assert.equal(v['dsh-plugin-yanyan-update'], '2.2.2');
     assert.equal(v['dsh-plugin-yanyan-subagent'], '3.3.3');
     assert.equal(v['dsh-plugin-yanyan-icon'], '4.4.4');
+    assert.equal(v['dsh-plugin-yanyan-trash'], '5.5.5');
     // 临时目录没有 node_modules，外部包应回退声明并去掉 ^。
     assert.ok(
       v[EXTERNAL_PKG] === '7.7.7' || SEMVER.test(String(v[EXTERNAL_PKG])),
       '外部包应回退声明 7.7.7（或读到实装版本）',
     );
-    assert.equal(Object.keys(v).length, 5);
+    assert.equal(Object.keys(v).length, 6);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -156,7 +167,7 @@ test('apply 注册 health + components 两条 exact 路由', () => {
   );
 });
 
-test('components 路由返回 5 个组件版本；health 返回聚合包版本', () => {
+test('components 路由返回 6 个组件版本；health 返回聚合包版本', () => {
   const { ctx, routes } = harness(undefined);
   apply(ctx);
 
@@ -164,7 +175,7 @@ test('components 路由返回 5 个组件版本；health 返回聚合包版本',
   routes[COMPONENTS_ROUTE]({ method: 'GET' }, res);
   assert.equal(res.status, 200);
   assert.equal(res.body.ok, true);
-  assert.equal(Object.keys(res.body.components).length, 5);
+  assert.equal(Object.keys(res.body.components).length, 6);
   assert.equal(res.body.components['dsh-plugin-yanyan-toolkit'], VERSION);
   assert.equal(res.head['cache-control'], 'no-store');
 

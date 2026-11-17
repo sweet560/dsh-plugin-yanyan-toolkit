@@ -4,3 +4,5 @@ node_modules/
 Thumbs.db
 *.tgz
 .backup-*/
+.tmp-asar-*.cjs
+.tmp-dsh-src/

@@ -294,6 +294,25 @@
         return out;
       }
 
+      // 当前会话是否检测到子智能体 —— 顶部「子智能体管理」按钮显隐的唯一判据。
+      // rows 是 loadRows 读到的当前会话 catalog：排除诊断行 / 已删除行 / 根会话行后
+      // 仍有行，才算「有子智能体」。数据源不支持（unsupported）时保守返回 true，
+      // 避免探测失败把管理入口永久藏掉；真正"没有"只在数据成功加载且确认为空时判定。
+      function hasSubagents() {
+        if (shared.unsupported) return true;
+        var rows = Array.isArray(shared.rows) ? shared.rows : [];
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i];
+          if (!r || typeof r !== 'object') continue;
+          if (r.kind === 'diagnostic') continue;
+          var id = r.id || r.childId;
+          if (id && isDeleted(id)) continue;
+          if (id && shared.rootId && id === shared.rootId) continue;
+          return true;
+        }
+        return false;
+      }
+
       // 根治「删不掉」：官方「N 个子智能体」浮层 SubagentHeaderLineage 只读
       // client 内存 store `projectionsBySession[*].values.subagentCatalog`。宿主对
       // 已加载的 live 父会话复用内存 fold state，改磁盘日志 / 删 projcache 都不会
@@ -391,6 +410,11 @@
       var officialObserver = null;
       var officialButtons = [];
       var autoTimer = null;
+      // 打开浮层时的触发按钮，作为浮层定位锚点（见 positionOverlay）。
+      var overlayAnchor = null;
+      // hover 模式：鼠标移开后延迟关闭，留出跨越按钮↔浮层间隙的时间。
+      var HOVER_CLOSE_DELAY = 200;
+      var hoverCloseTimer = null;
 
       function makeEmitter() {
         var subs = [];
@@ -406,6 +430,9 @@
       }
       var labelEmitter = makeEmitter();  // 改名后通知顶部按钮刷新文字
       var closeEmitter = makeEmitter();  // React 浮层关闭通知
+      // 当前会话是否检测到子智能体：refresh 拿到 rows 后 emit(bool)，
+      // 顶部按钮据此显隐（无子智能体时隐藏，检测到再出现）。
+      var visibilityEmitter = makeEmitter();
 
       function readTabLabel() { return shared.tabLabel || DEFAULT_TAB_LABEL; }
 
@@ -530,6 +557,9 @@
           shared.rows = res.rows;
           shared.unsupported = res.unsupported;
           updateIdleTracking(res.rows);
+          // 数据到位后同步按钮显隐：无子智能体时隐藏「子智能体管理」，
+          // 检测到再出现。用 emitter 通知 React 与原生降级两条路径。
+          try { visibilityEmitter.emit(hasSubagents()); } catch (e) {}
           if (trigger !== false) {
             try {
               if (ctx.sessions && typeof ctx.sessions.refreshProjections === 'function') {
@@ -792,6 +822,82 @@
         if (st.state === 'failed') return t('failed') + (st.message ? (': ' + st.message) : '');
         return '';
       }
+      // 图2（官方「N 个子智能体」浮层）行布局：token 数 + 耗时。
+      // 本插件的 subagentCatalog 不保证带这些字段，故防御性探测多种命名，
+      // 取不到时用客户端空闲估算兜底；不臆造数据。
+      function formatTokenCount(n) {
+        if (typeof n !== 'number' || !isFinite(n) || n <= 0) return '';
+        if (n >= 1000) return (n / 1000).toFixed(1) + 'K tok';
+        return n + ' tok';
+      }
+      function formatDuration(ms) {
+        if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return '';
+        if (ms < 1000) return Math.round(ms) + 'ms';
+        if (ms < 60000) return Math.round(ms / 1000) + '秒';
+        var mins = Math.floor(ms / 60000);
+        var secs = Math.round((ms % 60000) / 1000);
+        return mins + '分' + (secs ? secs + '秒' : '');
+      }
+      function rowTokenText(row) {
+        var u = row && row.tokenUsage;
+        var n = row && (row.totalTokens || row.tokenCount || row.tokens
+          || (u && (u.totalTokens || u.total || u.inputTokens + u.outputTokens)));
+        return formatTokenCount(n);
+      }
+      function rowDurationText(row) {
+        var ms = row && (row.durationMs || row.elapsedMs || row.duration);
+        var s = formatDuration(ms);
+        if (s) return s;
+        // 无稳定耗时字段时用空闲时长（客户端 firstSeen 估算）兜底。
+        if (row && row.activity !== 'running' && row.kind !== 'diagnostic') {
+          return formatDuration(idleMs(row.id));
+        }
+        return '';
+      }
+
+      // ───────────────── 浮层定位（贴触发按钮下方，带边界收拢） ─────────────────
+      // 浮层通过 createPortal 挂到 document.body（脱离 header.actions 槽，
+      // 见文件头注释），因此不能靠 CSS 静态 top/right，必须按锚点按钮的实时
+      // 位置计算 left/top。原实现写死 top:64px;right:24px 浮在对话区右上角，
+      // 离左上角的按钮很远，正是用户所说「界面太远」。
+      var ANCHOR_GAP = 6;   // 浮层与按钮之间的垂直间距（px）
+      var VIEWPORT_PAD = 8; // 浮层距视口边缘的最小留白（px）
+
+      function positionOverlay(view) {
+        if (!view || !view.container) return;
+        var c = view.container;
+        var anchor = overlayAnchor;
+        var av = (anchor && typeof anchor.getBoundingClientRect === 'function')
+          ? anchor.getBoundingClientRect() : null;
+        var vw = root.innerWidth || (doc.documentElement && doc.documentElement.clientWidth) || 0;
+        var vh = root.innerHeight || (doc.documentElement && doc.documentElement.clientHeight) || 0;
+        var cw = c.offsetWidth || 380;
+        var ch = c.offsetHeight || 0;
+        var left, top;
+
+        if (av && vw && vh) {
+          // 水平：左边缘与按钮左边缘平齐，朝右展开；右侧空间不够时再向左收拢。
+          left = av.left;
+          if (left < VIEWPORT_PAD) left = VIEWPORT_PAD;
+          if (left + cw > vw - VIEWPORT_PAD) left = Math.max(VIEWPORT_PAD, vw - cw - VIEWPORT_PAD);
+          // 垂直：优先放按钮下方；下方空间不足则翻到按钮上方。
+          var below = av.bottom + ANCHOR_GAP;
+          var above = av.top - ANCHOR_GAP - ch;
+          if (below + ch <= vh - VIEWPORT_PAD || below <= av.top) top = below;
+          else if (above >= VIEWPORT_PAD) top = above;
+          else top = Math.max(VIEWPORT_PAD, Math.min(below, vh - ch - VIEWPORT_PAD));
+        } else {
+          // 锚点不可得时的回退：仍贴在视口右上，但用实时视口宽度收拢。
+          left = Math.max(VIEWPORT_PAD, vw - cw - VIEWPORT_PAD);
+          top = 64;
+        }
+        c.style.left = Math.round(left) + 'px';
+        c.style.top = Math.round(top) + 'px';
+      }
+
+      function positionAllViews() {
+        for (var i = 0; i < views.length; i++) positionOverlay(views[i]);
+      }
 
       // ───────────────── 浮层骨架（只建一次，后续只增量刷新列表/状态） ─────────────────
       function createView(container, ctx, isPortal) {
@@ -932,28 +1038,44 @@
       }
 
       function renderRow(ctx, row) {
-        var line = el('yanyan-row');
+        // 图2 布局：绿点状态 +（名称 / id + token·耗时）+ 箭头 + 删除 X。
+        // 保留 data-dsh-part 标记与删除回调，不触碰顶部工具栏 / 底部清理功能。
+        var line = el('yanyan-row yanyan-row-official');
         line.setAttribute('data-dsh-part', 'row');
-        var name = (row.label || row.name || row.id || t('unknown'));
-        line.appendChild(lineText(name, 'yanyan-row-name', 'row-name'));
-
         var running = row.activity === 'running';
         var isDiag = row.kind === 'diagnostic';
-        var statusCls = 'yanyan-status ' + (running ? 'yanyan-running' : 'yanyan-idle');
-        var statusLabel = isDiag ? t('diagnostic') : (running ? t('running') : t('idle'));
-        var statusEl = lineText(statusLabel, statusCls, 'row-status');
-        line.appendChild(statusEl);
-        if (row.mode) line.appendChild(lineText(String(row.mode), 'yanyan-mode', 'row-mode'));
-        if (!isDiag && !running) {
-          line.appendChild(lineText(formatIdle(row), 'yanyan-idle-ms', 'row-idle'));
-        }
-        if (running) line.appendChild(lineText(t('stopHint'), 'yanyan-hint yanyan-stop', 'row-stop-hint'));
 
-        var st = shared.rowStatus[row.id];
-        if (st) {
-          var sEl = lineText(statusText(st), 'yanyan-row-state', 'row-state');
-          line.appendChild(sEl);
+        // 状态圆点：running=蓝/动态，其余=绿点（对齐官方空闲绿点）。
+        var dot = el('yanyan-row-dot' + (running ? ' is-running' : ''), 'span');
+        dot.setAttribute('data-dsh-part', 'row-dot');
+        line.appendChild(dot);
+
+        // 中间两行：第一行名称，第二行 id + token · 耗时。
+        var main = el('yanyan-row-main');
+        var name = (row.label || row.name || row.id || t('unknown'));
+        main.appendChild(lineText(name, 'yanyan-row-name', 'row-name'));
+        var metaParts = [];
+        var subId = row.childId || row.id;
+        if (subId) metaParts.push(String(subId));
+        var tok = rowTokenText(row);
+        var dur = rowDurationText(row);
+        var metric = [tok, dur].filter(Boolean).join(' · ');
+        if (metric) metaParts.push(metric);
+        if (metaParts.length) {
+          main.appendChild(lineText(metaParts.join('  '), 'yanyan-row-meta', 'row-meta'));
         }
+        // 诊断 / 运行状态补充提示、删除状态，作为轻量徽标并入 meta 行。
+        if (running) main.appendChild(lineText(t('stopHint'), 'yanyan-row-note', 'row-stop-hint'));
+        var st = shared.rowStatus[row.id];
+        if (st) main.appendChild(lineText(statusText(st), 'yanyan-row-note', 'row-state'));
+        if (isDiag) main.appendChild(lineText(t('diagnostic'), 'yanyan-row-note', 'row-status'));
+        line.appendChild(main);
+
+        // 右箭头：纯装饰（对齐官方列表 arrow），不参与交互。
+        var arrow = el('yanyan-row-arrow', 'span');
+        arrow.textContent = '\u203A';
+        arrow.setAttribute('data-dsh-part', 'row-arrow');
+        line.appendChild(arrow);
 
         // 根会话 / 诊断行不显示删除按钮；其余（含 running）允许删除。
         var isRoot = row.id === shared.rootId;
@@ -983,6 +1105,7 @@
           var view = createView(ref.current, props.ctx, true);
           views.push(view);
           view.update();
+          positionOverlay(view);
           refresh(props.ctx);
           return function () {
             var i = views.indexOf(view); if (i >= 0) views.splice(i, 1);
@@ -1003,6 +1126,9 @@
           onMouseDown: swallow,
           onPointerDown: swallow,
           onTouchStart: swallow,
+          // hover 模式：鼠标进入浮层取消延迟关闭，移出则重新计时。
+          onMouseEnter: function () { if (props.onEnter) props.onEnter(); },
+          onMouseLeave: function () { if (props.onLeave) props.onLeave(); },
         });
       }
 
@@ -1014,14 +1140,35 @@
           var open = openState[0], setOpen = openState[1];
           var labelState = React.useState(readTabLabel());
           var lbl = labelState[0], setLbl = labelState[1];
+          // 按钮显隐：当前会话无子智能体时隐藏。初始隐藏，首屏 refresh 数据到位后
+          // visibilityEmitter 会推送实际判定，避免先显示再消失的闪烁。
+          var visibleState = React.useState(false);
+          var visible = visibleState[0], setVisible = visibleState[1];
           React.useEffect(function () {
             var u1 = labelEmitter.subscribe(function (v) { setLbl(v); });
             var u2 = closeEmitter.subscribe(function () { setOpen(false); });
-            return function () { u1(); u2(); };
+            var u3 = visibilityEmitter.subscribe(function (v) {
+              setVisible(!!v);
+              if (!v) setOpen(false); // 子智能体消失时一并关闭浮层，避免悬空浮层
+            });
+            return function () { u1(); u2(); u3(); };
           }, []);
+          var btnRef = React.useRef(null);
+          // hover 模式：移入按钮即打开，移开延迟关闭；浮层内移入/移出由 PortalHost
+          // 的 onEnter/onLeave 协调，跨越按钮↔浮层间隙时不会误关。
+          var onEnter = function () {
+            cancelHoverClose();
+            if (btnRef.current) overlayAnchor = btnRef.current;
+            if (canPortal) { if (!open) setOpen(true); }
+            else ensureNativeOpen(ctx, btnRef.current);
+          };
+          var onLeave = function () { scheduleHoverClose(); };
+          // click 保留为无障碍/键盘兜底：hover 已打开时不再 toggle 关闭。
           var onClick = function () {
-            if (canPortal) setOpen(function (v) { return !v; });
-            else toggleOverlayNative(ctx);
+            if (btnRef.current) overlayAnchor = btnRef.current;
+            cancelHoverClose();
+            if (canPortal) { if (!open) setOpen(true); }
+            else ensureNativeOpen(ctx, btnRef.current);
           };
           // 关键：portal 必须与 <button> 是「兄弟」，不能是它的 children。
           // 旧实现把 createPortal(...) 塞进 <button> 的 kids，React 合成事件沿
@@ -1030,17 +1177,23 @@
           // 输入框「直接退出」，点「清理全部空闲」清完却立刻关闭看不见结果。
           // 用 Fragment 并列后，portal 的 fiber 父级是 Fragment，链路不再经过 button；
           // DOM 上浮层依旧 createPortal 到 document.body，位置与样式完全不变。
-          var tabBtn = React.createElement('button', {
+          // 当前会话无子智能体时 visible=false：按钮不渲染，浮层也不挂载，
+          // 但保留 Fragment 并列结构（Fix 1 的事件链前提不变）。
+          var tabBtn = visible ? React.createElement('button', {
+            ref: btnRef,
             'data-dsh-plugin': 'yanyan-subagent',
             'data-dsh-part': 'session-tab',
             className: 'yanyan-tab-btn',
             title: t('title'),
             onClick: onClick,
-          }, React.createElement('span', null, lbl || t('tab')));
+            onMouseEnter: onEnter,
+            onMouseLeave: onLeave,
+          }, React.createElement('span', null, lbl || t('tab'))) : null;
           var portal = null;
-          if (open && canPortal) {
+          if (visible && open && canPortal) {
             portal = ReactDOM.createPortal(
-              React.createElement(PortalHost, { ctx: ctx }), doc.body);
+              React.createElement(PortalHost, { ctx: ctx, onEnter: onEnter, onLeave: onLeave }),
+              doc.body);
           }
           return React.createElement(React.Fragment, null, tabBtn, portal);
         };
@@ -1058,7 +1211,11 @@
           views.push(view);
           nativeView = view;
           view.update();
+          positionOverlay(view);
           refresh(ctx);
+          // hover 模式：鼠标进入浮层取消延迟关闭，移出重新计时。
+          div.addEventListener('mouseenter', function () { cancelHoverClose(); });
+          div.addEventListener('mouseleave', function () { scheduleHoverClose(); });
         } catch (e) {
           try { if (nativeOverlay) nativeOverlay.remove(); } catch (e2) {}
           nativeOverlay = null; nativeView = null;
@@ -1078,6 +1235,51 @@
           try { views[i].container.innerHTML = ''; } catch (e2) {}
         }
         views.length = 0;
+        overlayAnchor = null;
+        cancelHoverClose();
+      }
+
+      // ───────────── hover 开合（鼠标移入按钮弹出、移开消失） ─────────────
+      // 浮层经 portal 挂到 body、与按钮之间有 ANCHOR_GAP 间隙，按钮 mouseleave
+      // 不能立刻关闭，否则鼠标还没移到浮层就消失。用短延迟 + 浮层 mouseenter
+      // 取消关闭来跨越间隙。
+      function cancelHoverClose() {
+        if (hoverCloseTimer) {
+          try { root.clearTimeout(hoverCloseTimer); } catch (e) {}
+          hoverCloseTimer = null;
+        }
+      }
+      function scheduleHoverClose() {
+        cancelHoverClose();
+        hoverCloseTimer = root.setTimeout(function () {
+          hoverCloseTimer = null;
+          try { closeEmitter.emit(); } catch (e) {}
+          closeNativeOverlay();
+        }, HOVER_CLOSE_DELAY);
+      }
+      // 原生降级的「打开」（幂等，不 toggle 关闭）：hover 与 click 都复用。
+      function ensureNativeOpen(ctx, btn) {
+        if (btn) overlayAnchor = btn;
+        if (!nativeOverlay) toggleOverlayNative(ctx);
+      }
+
+      // 点击浮层/触发按钮以外的空白位置，自动关闭浮层。
+      // 用 document capture 阶段 + contains 显式判断，不依赖 React 的
+      // stopPropagation（Fix 1），宿主换 React 版本或改 portal 挂载点也成立。
+      function closeOverlaysFromOutside(ev) {
+        if (!nativeOverlay && !views.length) return;
+        if (ev && typeof ev.button === 'number' && ev.button !== 0) return;
+        var target = ev && ev.target;
+        // 点击浮层内部（含输入框、设置、清理按钮等所有子操作）：不关闭。
+        for (var i = 0; i < views.length; i++) {
+          var c = views[i].container;
+          if (target && c && c.contains && c.contains(target)) return;
+        }
+        // 点击触发按钮本身：交给按钮 onClick 的 toggle，避免「先关后开」冲突。
+        if (target && overlayAnchor && overlayAnchor.contains && overlayAnchor.contains(target)) return;
+        // 其它空白区域：React 走 emitter 卸载 portal，原生降级直接移除。
+        try { closeEmitter.emit(); } catch (e) {}
+        closeNativeOverlay();
       }
 
       // ctx.slots 运行时不可用时，降级为纯 DOM 注入顶部按钮（尽力而为，不抛错）。
@@ -1091,11 +1293,29 @@
           btn.setAttribute('data-dsh-plugin', 'yanyan-subagent');
           btn.setAttribute('data-dsh-part', 'session-tab');
           btn.textContent = readTabLabel();
-          btn.addEventListener('click', function () { toggleOverlayNative(ctx); });
+          // hover 模式：移入打开、移开延迟关闭。
+          btn.addEventListener('mouseenter', function () {
+            cancelHoverClose();
+            ensureNativeOpen(ctx, btn);
+          });
+          btn.addEventListener('mouseleave', function () { scheduleHoverClose(); });
+          // click 保留为键盘/无障碍兜底：已打开时不 toggle 关闭。
+          btn.addEventListener('click', function () {
+            cancelHoverClose();
+            ensureNativeOpen(ctx, btn);
+          });
+          // 无子智能体时先隐藏，首屏 refresh 数据到位后由 visibilityEmitter 决定显隐。
+          btn.style.display = 'none';
           host.appendChild(btn);
           var unsub = labelEmitter.subscribe(function (l) { btn.textContent = l || t('tab'); });
+          var unsubVis = visibilityEmitter.subscribe(function (v) {
+            btn.style.display = v ? '' : 'none';
+            if (!v) { try { closeNativeOverlay(); } catch (e) {} cancelHoverClose(); }
+          });
           return function () {
             try { unsub(); } catch (e) {}
+            try { unsubVis(); } catch (e) {}
+            cancelHoverClose();
             try { btn.remove(); } catch (e2) {}
           };
         } catch (e) { return function () {}; }
@@ -1173,13 +1393,24 @@
 
       // ───────────────── 样式 ─────────────────
       var STYLE_CSS = [
+        // 「子智能体管理」按钮与官方「创造模式」一致：无边框、透明背景、次级灰字。
+        // 复用宿主主题变量 --dsw-alias-label-secondary-foreground（与根包
+        // lib/client.js:42 同一套 alias token），随明暗主题自适应。
         '.yanyan-tab-btn{display:inline-flex;align-items:center;gap:6px;',
-        'background:transparent;border:1px solid var(--yanyan-border,#d0d7de);',
-        'color:var(--yanyan-fg,#1f2328);border-radius:6px;padding:4px 10px;',
+        'background:transparent;border:0;',
+        'color:var(--dsw-alias-label-secondary-foreground,var(--yanyan-muted,#6b7280));',
+        'border-radius:6px;padding:4px 10px;',
         'font-size:12px;cursor:pointer;white-space:nowrap}',
-        '.yanyan-tab-btn:hover{border-color:var(--dsw-alias-button-primary-fill,#2f6feb)}',
-        '.yanyan-portal-host,.yanyan-native-overlay{position:fixed;top:64px;right:24px;',
-        'width:380px;max-width:calc(100vw - 48px);max-height:min(72vh,600px);',
+        // hover 时对齐官方「N 个子智能体」按钮：字变黑（常规前景）、无边框、无背景。
+        // 不能用 --dsw-alias-label-primary-foreground：它是「主按钮上的白字」token
+        // （兜底 #fff），在浅色浮层背景上会变白字导致文字「消失」。
+        // --yanyan-fg 在深色主题媒体查询里设为浅色、浅色主题兜底黑色，随主题自适应。
+        '.yanyan-tab-btn:hover,.yanyan-tab-btn:focus-visible{background:transparent;border:0;',
+        'color:var(--yanyan-fg,#1f2328)}',
+        // 位置由 positionOverlay() 按锚点按钮实时计算（贴按钮下方）；left/top 为
+        // 动态内联样式，CSS 只保留定位模式与尺寸，不再写死 top/right。
+        '.yanyan-portal-host,.yanyan-native-overlay{position:fixed;',
+        'width:380px;max-width:calc(100vw - 16px);max-height:min(72vh,600px);',
         'z-index:2147483000;background:var(--yanyan-bg,#fff);color:var(--yanyan-fg,#1f2328);',
         'border:1px solid var(--yanyan-border,#d0d7de);border-radius:12px;',
         'box-shadow:0 14px 40px rgba(0,0,0,.22);display:flex;flex-direction:column;',
@@ -1231,6 +1462,20 @@
         '.yanyan-result{font-size:11px;color:#1a7f37;flex-basis:100%}',
         '.yanyan-empty{padding:20px 14px;text-align:center;font-size:12px;',
         'color:var(--yanyan-muted,#656d76)}',
+        // 图2（官方子智能体浮层）行布局：绿点 + 双行文字 + 箭头 + 删除 X
+        '.yanyan-row-official{gap:10px;align-items:center;padding:9px 14px}',
+        '.yanyan-row-dot{flex:none;width:8px;height:8px;border-radius:50%;',
+        'background:#3fb950;box-shadow:0 0 0 3px rgba(63,185,80,.15)}',
+        '.yanyan-row-dot.is-running{background:#2f6feb;box-shadow:0 0 0 3px rgba(47,111,235,.15)}',
+        '.yanyan-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}',
+        '.yanyan-row-main .yanyan-row-name{font-size:13px;line-height:1.25;',
+        'color:var(--yanyan-fg,#1f2328)}',
+        '.yanyan-row-meta{font-size:11px;line-height:1.3;',
+        'color:var(--yanyan-muted,#656d76);white-space:nowrap;',
+        'overflow:hidden;text-overflow:ellipsis}',
+        '.yanyan-row-note{font-size:11px;line-height:1.3;color:var(--yanyan-muted,#656d76)}',
+        '.yanyan-row-arrow{flex:none;color:var(--yanyan-muted,#656d76);',
+        'font-size:16px;line-height:1;padding:0 2px}',
         '@media (prefers-color-scheme:dark){',
         '.yanyan-portal-host,.yanyan-native-overlay{--yanyan-bg:#1c2128;--yanyan-fg:#e6edf3;',
         '--yanyan-border:#30363d;--yanyan-muted:#8b949e;--yanyan-input-bg:#0d1117;',
@@ -1356,6 +1601,26 @@
             }
           } catch (e) {}
           unsubs.push(function () { clearOfficialButtons(); });
+
+          // 视口尺寸变化时重定位所有已打开浮层（仍贴锚点按钮，不会跑回右上角）。
+          try {
+            if (root.addEventListener) {
+              root.addEventListener('resize', positionAllViews);
+              unsubs.push(function () {
+                try { root.removeEventListener('resize', positionAllViews); } catch (e) {}
+              });
+            }
+          } catch (e) {}
+
+          // 点击空白关闭：capture 阶段监听，保证在浮层 stopPropagation 之前拿到事件。
+          try {
+            if (doc.addEventListener) {
+              doc.addEventListener('mousedown', closeOverlaysFromOutside, true);
+              unsubs.push(function () {
+                try { doc.removeEventListener('mousedown', closeOverlaysFromOutside, true); } catch (e) {}
+              });
+            }
+          } catch (e) {}
 
           return function () {
             disposed = true;

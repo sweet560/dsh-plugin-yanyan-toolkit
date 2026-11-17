@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-yanyan-subagent",
-  "version": "1.2.2",
+  "version": "1.4.0",
   "description": "子智能体管理：查看、彻底删除（日志根除 + 内存投影根治）、批量清理空闲与自动清理、清理残留行",
   "type": "module",
   "main": "lib/index.js",
@@ -24,7 +24,7 @@
   "engines": { "node": "^22.19.0 || >=24.0.0" },
   "scripts": { "test": "node --test test/*.test.mjs" },
   "dsh": {
-    "engines": { "dsh": ">=0.2.2-rc.2" },
+    "engines": { "dsh": ">=0.2.2-rc.3" },
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": { "inject": ["locale","sessions","slots"], "platform": "web" },
     "manifestVersion": 1

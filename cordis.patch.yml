@@ -1,7 +1,7 @@
-# 研研工具包：一个 bundle 挂载五条 loader 行 —— 自身元数据行 + 四个功能插件行。
+# 研研工具包：一个 bundle 挂载六条 loader 行 —— 自身元数据行 + 五个功能插件行。
 # 每行 name 必须互不相同且恰好等于对应包的 package.json name，否则
 # dsh-client-modules 会报 duplicate factory registration。
-# 四个功能插件各有独立 id，安装后可由用户在插件页单独启停。
+# 五个功能插件各有独立 id，安装后可由用户在插件页单独启停。
 - insert:
     # 自身行：只承载健康检查路由与空 client 壳，不贡献任何 UI。
     - id: yanyan-toolkit-compat
@@ -41,3 +41,10 @@
         radius: 13
         padding: 3
         borderWidth: 1
+
+    # 插件五「会话回收站」：路径 A 第 1~4b 阶段的成果。自建回收站（可恢复）、
+    # 彻底删除、会话树级联删除、批量操作；与现成归档插件并行，不接管其列表。
+    # Host 半复用聚合包 lib/session-{trash,purge,cascade,snapshot}.js 四个纯函数模块；
+    # Client 半注册独立 settings.section（id=dsh-yanyan-trash，order=26，避免与现成包 25 冲突）。
+    - id: dsh-plugin-yanyan-trash
+      name: 'dsh-plugin-yanyan-trash'
