@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Hub",
+    "description": "Side-car metadata: tag sessions, group them into folders (logical mapping only, native session files untouched), with a three-pane layout."
+  }
+}

@@ -28,4 +28,4 @@
 
 ## 版本
 
-随聚合包 `dsh-plugin-yanyan-toolkit` 一起发布；本子包当前版本 1.0.0，无独立 npm 版本线。
+随聚合包 `dsh-plugin-yanyan-toolkit` 一起发布；本子包当前版本 1.0.1，无独立 npm 版本线（能力已并入 `dsh-plugin-yanyan-session-hub`，此处保留占位）。

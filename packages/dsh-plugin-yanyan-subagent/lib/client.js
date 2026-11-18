@@ -69,6 +69,8 @@
         cancel: '取消',
         settings: '设置',
         refresh: '刷新',
+        refreshing: '正在刷新…',
+        refreshed: '已刷新',
         tabRenameHint: '输入新的标签名称',
         unknown: '未知',
         unsupported: '浏览器数据不可用',
@@ -116,6 +118,8 @@
         cancel: 'Cancel',
         settings: 'Settings',
         refresh: 'Refresh',
+        refreshing: 'Refreshing...',
+        refreshed: 'Refreshed',
         tabRenameHint: 'Enter a new tab name',
         unknown: 'Unknown',
         unsupported: 'Browser data unavailable',
@@ -198,7 +202,11 @@
           var row = list[i];
           if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
           if (row.kind === 'diagnostic') continue;
-          if (row.activity !== 'inactive') continue;
+          // 与列表「空闲」标签、manualCleanTargets 口径一致：只排除运行中。
+          // 官方 catalog 行没有 activity 字段，不能要求 activity==='inactive'，
+          // 否则定时自动清理永远筛不到目标（这正是「自动删除不触发」的根因）。
+          // 运行中既可能是 host /running 标的 row.running，也可能是旧行的 activity。
+          if (row.running === true || row.activity === 'running') continue;
           if (rootId != null && row.id === rootId) continue;
           var started = since(row.id);
           var base = typeof started === 'number' && Number.isFinite(started) ? started : now;
@@ -225,7 +233,10 @@
           var row = list[i];
           if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
           if (row.kind === 'diagnostic') continue;
-          if (row.activity === 'running') continue;
+          // 内联判定（不调用 isRowRunning）：本函数被 portal-interaction 测试单独提取
+          // 到 vm 执行，函数体内不可依赖外部符号。running 既可能来自 host /running
+          // 标的 row.running，也可能是旧行的 activity==='running'。
+          if (row.running === true || row.activity === 'running') continue;
           // 主键统一用 row.id：parseCatalogLocal 已给每行补齐 id，且与 renderRow /
           // deleteOne / onRowDelete 用同一个主键，避免「选中了却删不掉」。
           var id = row.id;
@@ -250,6 +261,12 @@
       // 做主键，保证两种写法都命中。
       function coreId(id) {
         return String(id || '').replace(/^session-/, '');
+      }
+      // 统一的「运行中」判定：官方 catalog 行没有 activity 字段，真实状态由
+      // host /running 路由按 ctx.get('agents') 标到 row.running 上；同时兼容旧的
+      // activity==='running' 行。所有「是否运行中」的判断都走这里，避免各处口径不一。
+      function isRowRunning(row) {
+        return !!row && (row.running === true || row.activity === 'running');
       }
       function readDeletedIds() {
         try {
@@ -389,11 +406,11 @@
       // ───────────────── 共享状态 ─────────────────
       var shared = {
         tabLabel: DEFAULT_TAB_LABEL,
-        autoCleanEnabled: false,
+        autoCleanEnabled: true,
         idleMinutes: 30,
-        checkIntervalMin: 1,
+        checkIntervalMin: 10,
         renameDraft: null,
-        autoDraft: { autoCleanEnabled: false, idleMinutes: 30, checkIntervalMin: 1 },
+        autoDraft: { autoCleanEnabled: true, idleMinutes: 30, checkIntervalMin: 10 },
         rows: [],
         rootId: '',
         unsupported: false,
@@ -488,24 +505,64 @@
         } catch (e) { return null; }
       }
 
+      // 把 host 判定的真实 running 状态打到行上：官方 catalog 行没有 activity 字段，
+      // 单靠 client 判不出「运行中」，必须先问 host（/running），否则「清理全部空闲」
+      // 会误删正在运行的子智能体。请求失败时保持原样（保守：不把任何行误标为空闲）。
+      function applyRunningState(ctx, rows) {
+        var candidates = (rows || []).filter(function (r) {
+          return r && typeof r === 'object' && (r.childId || r.id);
+        });
+        if (!candidates.length) {
+          return Promise.resolve({ rootId: '', rows: rows, unsupported: false });
+        }
+        var ids = candidates.map(function (r) { return r.childId || r.id; });
+        return postJson(ROUTE_BASE + '/running', { ids: ids })
+          .then(function (data) {
+            if (data && data.ok && Array.isArray(data.runningIds)) {
+              var running = {};
+              for (var i = 0; i < data.runningIds.length; i++) {
+                running[coreId(data.runningIds[i])] = true;
+              }
+              for (var j = 0; j < rows.length; j++) {
+                var row = rows[j];
+                if (row && typeof row === 'object' && running[coreId(row.childId || row.id)]) {
+                  row.running = true;
+                } else if (row && typeof row === 'object') {
+                  row.running = false;
+                }
+              }
+            }
+            return { rootId: '', rows: rows, unsupported: false };
+          })
+          .catch(function () {
+            return { rootId: '', rows: rows, unsupported: false };
+          });
+      }
+
       function loadRows(ctx) {
         var rootId = deriveRootId(ctx);
         var local = readLocalCatalog(ctx, rootId);
+        var result;
         if (local !== null) {
           // append-only catalog 会被宿主重建，这里持续过滤已删除 id。
-          return Promise.resolve({ rootId: rootId, rows: filterDeleted(local), unsupported: false });
+          result = Promise.resolve({ rootId: rootId, rows: filterDeleted(local), unsupported: false });
+        } else {
+          // 本地投影读不到：回退 host 侧兜底数据源。
+          result = postJson(ROUTE_BASE + '/list', { rootSessionId: rootId })
+            .then(function (data) {
+              if (data && data.ok && Array.isArray(data.rows)) {
+                return { rootId: rootId, rows: filterDeleted(parseCatalogLocal(data.rows)), unsupported: false };
+              }
+              return { rootId: rootId, rows: [], unsupported: true };
+            })
+            .catch(function () {
+              return { rootId: rootId, rows: [], unsupported: true };
+            });
         }
-        // 本地投影读不到：回退 host 侧兜底数据源。
-        return postJson(ROUTE_BASE + '/list', { rootSessionId: rootId })
-          .then(function (data) {
-            if (data && data.ok && Array.isArray(data.rows)) {
-              return { rootId: rootId, rows: filterDeleted(parseCatalogLocal(data.rows)), unsupported: false };
-            }
-            return { rootId: rootId, rows: [], unsupported: true };
-          })
-          .catch(function () {
-            return { rootId: rootId, rows: [], unsupported: true };
-          });
+        // 统一叠加 host 的实时 running 状态（成功/失败都不改变数据源的 unsupported 语义）。
+        return result.then(function (res) {
+          return applyRunningState(ctx, res.rows).then(function () { return res; });
+        });
       }
 
       // 空闲起点：官方没有 idleSince / lastActiveAt 字段，用内存 Map 记首次观察到
@@ -516,8 +573,11 @@
           var r = rows[i];
           if (!r || !r.id || r.kind === 'diagnostic') continue;
           alive[r.id] = true;
-          if (r.activity === 'running') shared.firstSeen.delete(r.id);
-          else if (r.activity === 'inactive' && !shared.firstSeen.has(r.id)) {
+          // 用统一判定：官方 catalog 行没有 activity 字段，旧逻辑只认
+          // activity==='inactive' 会导致官方行从不记录 firstSeen，idleSince
+          // 回退成 Date.now()，空闲阈值永远无法满足、定时清理筛不到目标。
+          if (isRowRunning(r)) shared.firstSeen.delete(r.id);
+          else if (!shared.firstSeen.has(r.id)) {
             shared.firstSeen.set(r.id, Date.now());
           }
         }
@@ -575,11 +635,11 @@
         var label = readLS(LS_LABEL);
         shared.tabLabel = label || DEFAULT_TAB_LABEL;
         var auto = readLS(LS_AUTO);
-        shared.autoCleanEnabled = auto === null ? false : (auto === 'true');
+        shared.autoCleanEnabled = auto === null ? true : (auto === 'true');
         var idle = readLS(LS_IDLE);
         shared.idleMinutes = idle === null ? 30 : clampInt(idle, 1, 10080, 30);
         var interval = readLS(LS_INTERVAL);
-        shared.checkIntervalMin = interval === null ? 1 : clampInt(interval, 1, 1440, 1);
+        shared.checkIntervalMin = interval === null ? 10 : clampInt(interval, 1, 1440, 10);
         shared.autoDraft = {
           autoCleanEnabled: shared.autoCleanEnabled,
           idleMinutes: shared.idleMinutes,
@@ -613,7 +673,7 @@
               shared.autoDraft.idleMinutes = shared.idleMinutes;
             }
             if (interval === null && Number.isFinite(cfg.checkIntervalMin)) {
-              shared.checkIntervalMin = clampInt(cfg.checkIntervalMin, 1, 1440, 1);
+              shared.checkIntervalMin = clampInt(cfg.checkIntervalMin, 1, 1440, 10);
               shared.autoDraft.checkIntervalMin = shared.checkIntervalMin;
             }
           })
@@ -665,7 +725,7 @@
 
       function onRowDelete(ctx, row) {
         if (!row || !row.id || row.id === shared.rootId || row.kind === 'diagnostic') return;
-        var running = row.activity === 'running';
+        var running = isRowRunning(row);
         var msg = running ? t('confirmDeleteRunning') : t('confirmDelete');
         var ok = true;
         try { ok = root.confirm(msg); } catch (e) { ok = true; }
@@ -733,7 +793,7 @@
       }
 
       // 自动清理巡检：live check 失败（unsupported）时 fail-closed 不删；
-      // running 绝不碰（idleFilterLocal 只选 inactive）。
+      // running 绝不碰（idleFilterLocal 只排除运行中）。
       function autoCleanTick(ctx) {
         if (!shared.autoCleanEnabled) return;
         return loadRows(ctx).then(function (res) {
@@ -810,7 +870,7 @@
         return s;
       }
       function formatIdle(row) {
-        if (!row || row.kind === 'diagnostic' || row.activity === 'running') return '';
+        if (!row || row.kind === 'diagnostic' || isRowRunning(row)) return '';
         var ms = idleMs(row.id);
         var mins = Math.floor(ms / 60000);
         return mins > 0 ? (mins + ' ' + t('minutes')) : ('0 ' + t('minutes'));
@@ -849,7 +909,7 @@
         var s = formatDuration(ms);
         if (s) return s;
         // 无稳定耗时字段时用空闲时长（客户端 firstSeen 估算）兜底。
-        if (row && row.activity !== 'running' && row.kind !== 'diagnostic') {
+        if (row && !isRowRunning(row) && row.kind !== 'diagnostic') {
           return formatDuration(idleMs(row.id));
         }
         return '';
@@ -918,7 +978,18 @@
         var toolbar = el('yanyan-toolbar');
         toolbar.setAttribute('data-dsh-part', 'toolbar');
         toolbar.appendChild(button(t('refresh'), 'yanyan-btn', 'refresh', function () {
-          shared.cleanStatus = ''; shared.settingsStatus = ''; refresh(ctx);
+          // 刷新后数据可能不变（读本地投影），若不给反馈用户会以为按钮失效。
+          // 立即显示「正在刷新…」，完成后显示「已刷新」，失败显示「失败」。
+          shared.settingsStatus = '';
+          shared.cleanStatus = t('refreshing');
+          view.update();
+          return refresh(ctx).then(function () {
+            shared.cleanStatus = t('refreshed');
+            view.update();
+          }, function () {
+            shared.cleanStatus = t('failed');
+            view.update();
+          });
         }));
         toolbar.appendChild(button(t('settings'), 'yanyan-btn', 'settings-toggle', function () {
           view.expandedSettings = !view.expandedSettings;
@@ -1038,11 +1109,11 @@
       }
 
       function renderRow(ctx, row) {
-        // 图2 布局：绿点状态 +（名称 / id + token·耗时）+ 箭头 + 删除 X。
+        // 图2 布局：绿点状态 +（名称 / id + token·耗时）+ 状态徽标 + 删除 X。
         // 保留 data-dsh-part 标记与删除回调，不触碰顶部工具栏 / 底部清理功能。
         var line = el('yanyan-row yanyan-row-official');
         line.setAttribute('data-dsh-part', 'row');
-        var running = row.activity === 'running';
+        var running = isRowRunning(row);
         var isDiag = row.kind === 'diagnostic';
 
         // 状态圆点：running=蓝/动态，其余=绿点（对齐官方空闲绿点）。
@@ -1050,37 +1121,36 @@
         dot.setAttribute('data-dsh-part', 'row-dot');
         line.appendChild(dot);
 
-        // 中间两行：第一行名称，第二行 id + token · 耗时。
+        // 单行：仅名称（用户要求删除第二行 id + token · 耗时）。
         var main = el('yanyan-row-main');
         var name = (row.label || row.name || row.id || t('unknown'));
         main.appendChild(lineText(name, 'yanyan-row-name', 'row-name'));
-        var metaParts = [];
-        var subId = row.childId || row.id;
-        if (subId) metaParts.push(String(subId));
-        var tok = rowTokenText(row);
-        var dur = rowDurationText(row);
-        var metric = [tok, dur].filter(Boolean).join(' · ');
-        if (metric) metaParts.push(metric);
-        if (metaParts.length) {
-          main.appendChild(lineText(metaParts.join('  '), 'yanyan-row-meta', 'row-meta'));
-        }
-        // 诊断 / 运行状态补充提示、删除状态，作为轻量徽标并入 meta 行。
+        // 诊断 / 运行状态补充提示、删除状态，作为轻量徽标并入该行。
         if (running) main.appendChild(lineText(t('stopHint'), 'yanyan-row-note', 'row-stop-hint'));
         var st = shared.rowStatus[row.id];
         if (st) main.appendChild(lineText(statusText(st), 'yanyan-row-note', 'row-state'));
         if (isDiag) main.appendChild(lineText(t('diagnostic'), 'yanyan-row-note', 'row-status'));
         line.appendChild(main);
 
-        // 右箭头：纯装饰（对齐官方列表 arrow），不参与交互。
-        var arrow = el('yanyan-row-arrow', 'span');
-        arrow.textContent = '\u203A';
-        arrow.setAttribute('data-dsh-part', 'row-arrow');
-        line.appendChild(arrow);
+        // 明确的状态文字徽标：让「空闲 / 运行中」一眼可辨（复用已有 .yanyan-status 样式）。
+        // 放在行右侧（main 之后、删除 X 之前），配合 align-self:flex-start 靠顶部对齐，
+        // 视觉上落在第一行右端——即用户箭头指向的位置。
+        if (!isDiag && row.id !== shared.rootId) {
+          if (running) {
+            line.appendChild(lineText(t('running'), 'yanyan-status yanyan-running', 'row-status-badge'));
+          } else {
+            line.appendChild(lineText(t('idle'), 'yanyan-status yanyan-idle', 'row-status-badge'));
+          }
+        }
 
+        // 已移除右箭头：它只是对齐官方列表的纯装饰（不参与交互），点击无反应，
+        // 徒增视觉噪音。列表保留状态、信息与删除 X。
         // 根会话 / 诊断行不显示删除按钮；其余（含 running）允许删除。
         var isRoot = row.id === shared.rootId;
         if (!isDiag && !isRoot && row.id) {
-          var del = button(X_MARK, 'yanyan-x', 'row-delete', function () { onRowDelete(ctx, row); });
+          var del = button(X_MARK, 'yanyan-x', 'row-delete', function () {
+            onRowDelete(ctx, row);
+          });
           del.setAttribute('aria-label', t('delete'));
           del.title = t('delete');
           if (st && st.state === 'deleted') del.disabled = true;
@@ -1353,36 +1423,19 @@
         if (matches.length === 1 && matches[0].id) {
           var row = matches[0];
           var ok = true;
-          try { ok = root.confirm(row.activity === 'running' ? t('confirmDeleteRunning') : t('confirmDelete')); }
+          try { ok = root.confirm(isRowRunning(row) ? t('confirmDeleteRunning') : t('confirmDelete')); }
           catch (e3) { ok = true; }
-          if (ok) deleteOne(ctx, row, row.activity === 'running');
+          if (ok) deleteOne(ctx, row, isRowRunning(row));
         } else {
           try { root.alert(t('officialNoMatch')); } catch (e4) {}
         }
       }
 
       function injectOfficialButtons(ctx, panel) {
-        var items = panel.querySelectorAll('[role="treeitem"]');
-        for (var i = 0; i < items.length; i++) {
-          (function (item) {
-            if (item.querySelector('[data-dsh-part="official-row-delete"]')) return;
-            var b = doc.createElement('button');
-            b.type = 'button';
-            b.className = 'yanyan-official-x';
-            b.setAttribute('data-dsh-plugin', 'yanyan-subagent');
-            b.setAttribute('data-dsh-part', 'official-row-delete');
-            b.setAttribute('aria-label', t('delete'));
-            b.title = t('delete');
-            b.textContent = X_MARK;
-            b.addEventListener('click', function (ev) {
-              if (ev && ev.stopPropagation) ev.stopPropagation();
-              if (ev && ev.preventDefault) ev.preventDefault();
-              onOfficialXClick(ctx, item, items);
-            });
-            item.appendChild(b);
-            officialButtons.push(b);
-          })(items[i]);
-        }
+        // 用户要求：不再往官方「N 个子智能体」面板注入单条删除 X。
+        // 保留空函数以兼容既有调用点；删除统一走「子智能体管理」浮层行内 X
+        // 与底部「清理全部空闲」。clearOfficialButtons 仍会清掉历史注入残留。
+        void ctx; void panel;
       }
       function clearOfficialButtons() {
         for (var i = 0; i < officialButtons.length; i++) {
@@ -1439,11 +1492,13 @@
         '.yanyan-check{display:flex;align-items:center;gap:6px;font-size:12px}',
         '.yanyan-hint{font-size:11px;color:var(--yanyan-muted,#656d76);margin:8px 0 0}',
         '.yanyan-settings .yanyan-btn-primary{margin-top:8px}',
-        '.yanyan-list{flex:1;overflow:auto;min-height:60px}',
+        // 列表高度贴合内容：去掉固定 min-height，避免删到只剩一行时行下方留出大片空白。
+        // 多行时仍由 flex:1 + overflow:auto 在浮层 max-height 内滚动。
+        '.yanyan-list{flex:1;overflow:auto}',
         '.yanyan-row{display:flex;align-items:center;gap:8px;padding:8px 14px;',
         'border-bottom:1px solid var(--yanyan-border,#d0d7de)}',
         '.yanyan-row-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-        '.yanyan-status{font-size:11px;padding:1px 6px;border-radius:10px;white-space:nowrap}',
+        '.yanyan-status{font-size:11px;padding:1px 6px;border-radius:10px;white-space:nowrap;align-self:flex-start}',
         '.yanyan-idle{background:var(--yanyan-idle-bg,#eaeef2);color:var(--yanyan-muted,#656d76)}',
         '.yanyan-running{background:var(--yanyan-run-bg,#dafbe1);color:#1a7f37}',
         '.yanyan-mode,.yanyan-idle-ms,.yanyan-root-tag{font-size:11px;',
@@ -1462,20 +1517,19 @@
         '.yanyan-result{font-size:11px;color:#1a7f37;flex-basis:100%}',
         '.yanyan-empty{padding:20px 14px;text-align:center;font-size:12px;',
         'color:var(--yanyan-muted,#656d76)}',
-        // 图2（官方子智能体浮层）行布局：绿点 + 双行文字 + 箭头 + 删除 X
-        '.yanyan-row-official{gap:10px;align-items:center;padding:9px 14px}',
+        // 图2（子智能体管理浮层）行布局：绿点 + 双行文字 + 状态徽标 + 删除 X
+        '.yanyan-row-official{gap:10px;align-items:center;padding:9px 14px;',
+        'border-radius:6px;transition:background .12s ease}',
+        // 模仿官方「N 个子智能体」面板：鼠标悬停整行时显示浅灰圆角背景高亮。
+        // 复用主题变量 idle-bg（浅色灰 / 深色灰），自动适配明暗主题。
+        '.yanyan-row-official:hover{background:var(--yanyan-idle-bg,#eaeef2)}',
         '.yanyan-row-dot{flex:none;width:8px;height:8px;border-radius:50%;',
         'background:#3fb950;box-shadow:0 0 0 3px rgba(63,185,80,.15)}',
         '.yanyan-row-dot.is-running{background:#2f6feb;box-shadow:0 0 0 3px rgba(47,111,235,.15)}',
         '.yanyan-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}',
         '.yanyan-row-main .yanyan-row-name{font-size:13px;line-height:1.25;',
         'color:var(--yanyan-fg,#1f2328)}',
-        '.yanyan-row-meta{font-size:11px;line-height:1.3;',
-        'color:var(--yanyan-muted,#656d76);white-space:nowrap;',
-        'overflow:hidden;text-overflow:ellipsis}',
         '.yanyan-row-note{font-size:11px;line-height:1.3;color:var(--yanyan-muted,#656d76)}',
-        '.yanyan-row-arrow{flex:none;color:var(--yanyan-muted,#656d76);',
-        'font-size:16px;line-height:1;padding:0 2px}',
         '@media (prefers-color-scheme:dark){',
         '.yanyan-portal-host,.yanyan-native-overlay{--yanyan-bg:#1c2128;--yanyan-fg:#e6edf3;',
         '--yanyan-border:#30363d;--yanyan-muted:#8b949e;--yanyan-input-bg:#0d1117;',
@@ -1580,7 +1634,7 @@
           // 首屏刷新。
           refresh(ctx);
 
-          // 自动清理巡检（默认关闭；配置变更即时重排 interval）。
+          // 自动清理巡检（默认开启；配置变更即时重排 interval）。
           reconfigureInterval(ctx);
           unsubs.push(function () {
             if (autoTimer) { try { root.clearInterval(autoTimer); } catch (e) {} autoTimer = null; }

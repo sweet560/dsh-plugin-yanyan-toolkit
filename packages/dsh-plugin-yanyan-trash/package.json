@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-yanyan-trash",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "会话回收站：移入回收站（可恢复）、彻底删除、会话树级联删除、批量操作；与官方会话归档并行，不接管旧列表。",
   "type": "module",
   "main": "lib/index.js",

@@ -2,6 +2,48 @@
 
 All notable changes to this project are documented here.
 
+## 1.4.12 — 2026-11-18（正式发布）
+
+> 会话管理中心（Session Hub）Phase 1/2/3 首次随聚合包发布，并修复会话标题实时更新、增强回收站、标签体系纳入 DSH 状态标签。
+
+### 版本总览
+
+| 组件 | 版本 |
+|---|---|
+| `dsh-plugin-yanyan-toolkit`（聚合根包） | **1.4.12** |
+| `dsh-plugin-yanyan-subagent`（子智能体管理） | 1.4.11 |
+| `dsh-plugin-yanyan-session-hub`（会话管理中心） | 1.0.1（首次发布） |
+| `dsh-plugin-yanyan-update` | 1.2.2 |
+| `dsh-plugin-yanyan-icon` | 1.0.2 |
+| `dsh-plugin-yanyan-trash`（能力并入 session-hub，保留占位） | 1.0.1 |
+| `@linxin666/dsh-session-archive` | 0.4.18 |
+
+### 一、会话管理中心 Session Hub（Phase 1/2/3，首次发布）
+
+- **Phase 1 旁路元数据**：`lib/session-metadata.js` 以旁路 JSON 存储会话标签 / 文件夹 / 自定义标题（原子写 + Promise 串行锁，系统文件夹 `@trash`/`@unfiled` 受保护）；`lib/session-metadata-service.js` 合并活跃会话 × 元数据；`lib/session-metadata-routes.js` 提供 `/api/dsh-yanyan-session-hub` 统一路由（22 条）。
+- **Phase 2 全文搜索**：`lib/search-index.js` 复用 `zstd-frames.decodeLog` 逐帧解压会话日志（跳过 reasoning / tool-call / tool-result，中文单字 + 2-gram / 英文整词），内存倒排索引 + `setImmediate` 分片 + 多重熔断，支持增量更新。
+- **Phase 3 Markdown 导出**：`lib/export-markdown.js` 自带 store-mode ZIP 打包（CRC32 0xEDB88320，零第三方依赖），支持导出选中 / 全部会话。
+- **回收站融合**：原 `dsh-plugin-yanyan-trash` 置为 disabled，能力并入 session-hub，`trash/*`、`archive/unarchive/deleteArchived` 统一到 `/api/dsh-yanyan-session-hub`。
+- 新子包 `packages/dsh-plugin-yanyan-session-hub`（host/client 半区 + 中英 locale + 双语 README），随根包发布。
+
+### 二、修复会话标题不实时更新
+
+- 根因：标题权威源在 `$DSH_HOME/storages/session_projcache/sessions/<id>.json` 的 `rows.title.val`，但 `lib/native-session-source.js:readSessionIndexIds` 原本只读 `createdAt`/`cwd`、未读 title；日志派生的 `empty` 近似判断又会把有真实标题的会话强制覆盖成「空会话」。
+- 修复：`readSessionIndexIds` 扩展读取 `rows.title.val` / `rows.titleInput.val.first.text` / `rows.sessionListMetadata.val.blank`（fail-closed）；`session-metadata-service.buildItem` 标题优先级改为「自定义标题 > 原生 projcache 标题 > 日志派生 > 截断 id」，`empty` 改用原生 blank 标志；client 新增 `refreshItems()` 静默刷新，索引 ready 后每约 6s 重拉 `list()` 保持标题 / 状态实时同步。
+
+### 三、回收站增强
+
+- 新增筛选工具条：搜索框（按标题 / 内容 / ID，大小写不敏感）、工作区下拉、标签下拉。
+- 新增批量条：全选当前结果 / 清空选择 / 已选 N 项 / 批量彻底恢复 / 批量彻底删除（均带确认提示，只作用于筛选后的可见行）。
+- 后端 `lib/session-snapshot.js` 新增 `readSessionTitleAndContent()`，一次解压同时抽出标题 / 对话文本（供内容搜索，`maxContentChars=4000`）/ cwd；`session-trash-service.list()` 补 `content`/`cwd`；`session-metadata-service.trashList` 补 `tags`/`workspace`（纯内存映射，不落账本）。
+- 批量恢复因后端 `trashRestore` 仅收单 id，由前端 `trashRestoreMany` 逐条并发并聚合结果。
+
+### 四、标签体系纳入 DSH 状态标签
+
+- 「全部标签」下拉与「标签」页标签云现包含 6 种 DSH 状态标签：`已归档 / 进行中 / 空白 / 子会话 / 空闲 / 空会话`，计数从全量会话实时聚合。
+- 状态标签用内部前缀 `__status__` 编码为 value，与同名手动标签隔离；筛选时状态走 `it.status`、手动标签走 `it.tags`，互不串味。
+- 中英 i18n 各补 `hub.statusTagLabel` / `hub.statusTagChip`。
+
 ## 1.4.2 — 2026-11-17（正式发布）
 
 > 路径 A（会话管理重做）完整落地版本。**下方各 `###` 段是本版本各特性的详细变更记录**（由原「Unreleased」段归档而来，均已真机验证通过）。

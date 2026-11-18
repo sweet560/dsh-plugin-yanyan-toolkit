@@ -3,6 +3,6 @@
       name: 'dsh-plugin-yanyan-subagent'
       config:
         tabLabel: 智能体管理
-        autoCleanEnabled: false
+        autoCleanEnabled: true
         idleMinutes: 30
-        checkIntervalMin: 1
+        checkIntervalMin: 10

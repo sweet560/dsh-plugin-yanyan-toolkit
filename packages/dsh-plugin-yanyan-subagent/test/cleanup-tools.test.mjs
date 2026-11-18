@@ -45,8 +45,8 @@ test('导出面：三个模型工具工厂与 render 辅助函数未导出（按
 
 test('normalizeConfig：缺省兜底、去空白、超长截断、越界回落', () => {
   assert.deepEqual(normalizeConfig(), {
-    tabLabel: '智能体管理', autoCleanEnabled: false, idleMinutes: 30,
-    checkIntervalMin: 1, labelMaxLength: 24,
+    tabLabel: '智能体管理', autoCleanEnabled: true, idleMinutes: 30,
+    checkIntervalMin: 10, labelMaxLength: 24,
   });
   assert.deepEqual(normalizeConfig({}), normalizeConfig());
   const c = normalizeConfig({
@@ -60,7 +60,7 @@ test('normalizeConfig：缺省兜底、去空白、超长截断、越界回落',
   // 越界回落默认（代码 lib/index.js:76 / :81）
   assert.equal(normalizeConfig({ idleMinutes: 99999 }).idleMinutes, 30);
   assert.equal(normalizeConfig({ idleMinutes: 0 }).idleMinutes, 30);
-  assert.equal(normalizeConfig({ checkIntervalMin: 99999 }).checkIntervalMin, 1);
+  assert.equal(normalizeConfig({ checkIntervalMin: 99999 }).checkIntervalMin, 10);
   assert.equal(normalizeConfig({ tabLabel: 'X'.repeat(30) }).tabLabel.length, 24);
   assert.equal(normalizeConfig({ tabLabel: '   ' }).tabLabel, '智能体管理');
 });

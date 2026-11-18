@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-yanyan-icon",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "图标生成：根据上传的图片生成适配插件列表图标位的 icon.svg",
   "type": "module",
   "main": "lib/index.js",

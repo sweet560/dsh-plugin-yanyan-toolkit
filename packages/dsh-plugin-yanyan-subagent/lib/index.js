@@ -56,15 +56,16 @@ export const ARCHIVE_ROUTE = `${ROUTE_BASE}/archive`;
 export const PURGE_ROUTE = `${ROUTE_BASE}/purge`;
 export const SCRUB_ROUTE = `${ROUTE_BASE}/scrub`;
 export const CLEANUP_ROUTE = `${ROUTE_BASE}/cleanup`;
+export const RUNNING_ROUTE = `${ROUTE_BASE}/running`;
 export const DELETE_API = '/api/dsh-session-archive/delete';
 
 const BODY_LIMIT = 64 * 1024;
 export const DEFAULT_TAB_LABEL = '智能体管理';
 export const CONFIG_DEFAULTS = Object.freeze({
   tabLabel: DEFAULT_TAB_LABEL,
-  autoCleanEnabled: false,
+  autoCleanEnabled: true,
   idleMinutes: 30,
-  checkIntervalMin: 1,
+  checkIntervalMin: 10,
   labelMaxLength: 24,
 });
 
@@ -92,7 +93,9 @@ export function normalizeConfig(config) {
 
   return {
     tabLabel,
-    autoCleanEnabled: c.autoCleanEnabled === true,
+    // 默认开启：只有显式 false 才关闭；缺省回落到 CONFIG_DEFAULTS.autoCleanEnabled。
+    autoCleanEnabled: c.autoCleanEnabled == null
+      ? CONFIG_DEFAULTS.autoCleanEnabled : c.autoCleanEnabled === true,
     idleMinutes,
     checkIntervalMin,
     labelMaxLength: maxLength,
@@ -520,6 +523,29 @@ function makeListHandler(ctx) {
     } catch (error) {
       respond(res, 200, { ok: false, error: 'service-unavailable', rows: [] });
     }
+  };
+}
+
+/**
+ * 运行中状态路由：官方 subagentCatalog 投影行没有 activity 字段，client 自己
+ * 判不出「运行中」，导致「清理全部空闲」把正在运行的子智能体一起删掉。
+ * 这里复用 host 既有的 isRunningSubagent（读 ctx.get('agents') 的实时 status），
+ * 返回调用方给出的 id 中真正处于 running 的核心 id 集合，供 client 打标。
+ * isRunningSubagent 保持非导出（见 test/cleanup-tools.test.mjs 的导出面契约）。
+ */
+export function makeRunningHandler(ctx) {
+  return async function runningHandler(req, res) {
+    if (!guard(req, res, ctx)) return;
+    const payload = await parsePayload(req, res, ['POST']);
+    if (payload === null) return;
+    const ids = Array.isArray(payload.ids)
+      ? payload.ids.filter((v) => typeof v === 'string' || typeof v === 'number').map(String)
+      : [];
+    const runningIds = [];
+    for (const id of ids) {
+      if (isRunningSubagent(ctx, id)) runningIds.push(coreId(id));
+    }
+    respond(res, 200, { ok: true, runningIds });
   };
 }
 
@@ -969,6 +995,7 @@ export function apply(ctx, config) {
     { path: PURGE_ROUTE, handler: deleteHandler },
     { path: SCRUB_ROUTE, handler: makeScrubHandler(ctx) },
     { path: CLEANUP_ROUTE, handler: makeCleanupHandler(ctx) },
+    { path: RUNNING_ROUTE, handler: makeRunningHandler(ctx) },
   ];
   // register 的返回值直接作为 effect 清理函数，保证禁用 / HMR 时路由自动撤销。
   for (const route of routes) {

@@ -1,4 +1,4 @@
-// 跨包集成校验：五个功能插件 + 自身行的装载前提逐项核对。
+// 跨包集成校验：六个功能插件 + 自身行的装载前提逐项核对。
 // 不联网、不依赖第三方 YAML 库；只用 node 内置模块。
 
 import { test } from 'node:test';
@@ -13,6 +13,7 @@ const CHILDREN = [
   'packages/dsh-plugin-yanyan-subagent',
   'packages/dsh-plugin-yanyan-icon',
   'packages/dsh-plugin-yanyan-trash',
+  'packages/dsh-plugin-yanyan-session-hub',
 ];
 
 function readJson(rel) {
@@ -60,7 +61,7 @@ test('每个功能插件的 host / client 半区与展示元数据齐备', () =>
 test('各行 name 严格等于对应包 package.json 的 name', () => {
   const text = readFileSync(join(root, 'cordis.patch.yml'), 'utf8');
   const names = [...text.matchAll(/^\s+name:\s*'([^']+)'\s*$/gm)].map((m) => m[1]);
-  assert.equal(names.length, 6, '应有 6 行 name');
+  assert.equal(names.length, 7, '应有 7 行 name');
   assert.equal(readJson('package.json').name, 'dsh-plugin-yanyan-toolkit');
   assert.ok(names.includes('dsh-plugin-yanyan-toolkit'), '自身行 name');
   for (const dir of CHILDREN) {
@@ -74,7 +75,7 @@ test('各行 name 严格等于对应包 package.json 的 name', () => {
 
 test('源码不含装饰性 emoji（功能符号与箭头除外）', () => {
   const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u;
-  const allowed = new Set([0x2715, 0x2192, 0x2190, 0x2026, 0x2713, 0x2714]); // ✕ → ← … ✓ ✔
+  const allowed = new Set([0x2715, 0x2192, 0x2190, 0x2026, 0x2713, 0x2714, 0x1f6a8, 0x26a0]); // ✕ → ← … ✓ ✔ 🚨 ⚠️(危险警示，用于彻底删除确认)
   const hits = [];
   for (const f of collect(root)) {
     for (const ch of readFileSync(f, 'utf8')) {

@@ -6,7 +6,7 @@ test('normalizeConfig 缺省兜底：undefined / 空对象回落到全套默认�
   for (const input of [undefined, null, {}, 0, 'x']) {
     const c = normalizeConfig(input);
     assert.equal(c.tabLabel, DEFAULT_TAB_LABEL);
-    assert.equal(c.autoCleanEnabled, false);
+    assert.equal(c.autoCleanEnabled, true);
     assert.equal(c.idleMinutes, CONFIG_DEFAULTS.idleMinutes);
     assert.equal(c.checkIntervalMin, CONFIG_DEFAULTS.checkIntervalMin);
     assert.equal(c.labelMaxLength, 24);
@@ -35,9 +35,9 @@ test('normalizeConfig idleMinutes 越界 / 非法回落，合法值取整保留'
 });
 
 test('normalizeConfig checkIntervalMin 与 autoCleanEnabled 兜底', () => {
-  assert.equal(normalizeConfig({ checkIntervalMin: 0 }).checkIntervalMin, 1);
-  assert.equal(normalizeConfig({ checkIntervalMin: 1441 }).checkIntervalMin, 1);
-  assert.equal(normalizeConfig({ checkIntervalMin: 'x' }).checkIntervalMin, 1);
+  assert.equal(normalizeConfig({ checkIntervalMin: 0 }).checkIntervalMin, 10);
+  assert.equal(normalizeConfig({ checkIntervalMin: 1441 }).checkIntervalMin, 10);
+  assert.equal(normalizeConfig({ checkIntervalMin: 'x' }).checkIntervalMin, 10);
   assert.equal(normalizeConfig({ checkIntervalMin: 5 }).checkIntervalMin, 5);
   assert.equal(normalizeConfig({ autoCleanEnabled: 1 }).autoCleanEnabled, false);
   assert.equal(normalizeConfig({ autoCleanEnabled: 'true' }).autoCleanEnabled, false);

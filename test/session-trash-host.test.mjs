@@ -228,6 +228,32 @@ test('真机 bug m03612：TrashService.list 从会话日志补 entry.title，读
   assert.equal(plain.title, null, '读不到日志回退 null，由 client 显示 id');
 });
 
+test('回收站增强：TrashService.list 补 content/cwd（标题/内容/ID 搜索的数据源）', async () => {
+  const trashedDir = '/dsh/session-trash/proj/session-rich';
+  const jsonl = [
+    JSON.stringify({ type: 'session', version: 4, id: 'session-rich', cwd: 'F:\\DeepSeek Harness workspace\\default-workspace\\demo' }),
+    JSON.stringify({ type: 'session/title', seq: 1, data: { title: '旧标题' } }),
+    JSON.stringify({ type: 'session/title', seq: 9, data: { title: '最新标题' } }),
+    JSON.stringify({ type: 'user/message', seq: 10, data: { content: [{ type: 'text', text: '你好世界' }, { type: 'image', data: 'x' }] } }),
+    JSON.stringify({ type: 'assistant/message', seq: 11, data: { message: { content: [{ type: 'text', text: '回复内容' }] } } }),
+  ].join('\n');
+  const manifest = { version: 1, entries: {
+    'session-rich': { id: 'session-rich', originalPath: '/old/rich', trashedPath: trashedDir, trashedAt: 1 },
+  }, quarantined: [] };
+  const fs = createMemFs({
+    dirs: ['/dsh/session-trash'], manifest,
+    files: { [join(trashedDir, 'session.v4.jsonl.zstd')]: zstdCompressSync(Buffer.from(jsonl)) },
+  });
+  const service = new TrashService({ fs, sessionsRoot: '/dsh/sessions', trashRoot: '/dsh/session-trash', caps: makeCaps() });
+  const res = await service.list();
+  const e = res.entries.find((x) => x.id === 'session-rich');
+  assert.equal(e.title, '最新标题', '取末条 session/title 为最新标题');
+  assert.match(e.content, /你好世界/, 'content 含 user/message 的 text part');
+  assert.match(e.content, /回复内容/, 'content 含 assistant/message 的 text part');
+  assert.doesNotMatch(e.content, /image/, '忽略非 text part');
+  assert.equal(e.cwd, 'F:\\DeepSeek Harness workspace\\default-workspace\\demo', '补 cwd 供工作区筛选派生');
+});
+
 test('TrashService.baseDeps 透传 locate/isSessionActive，能力齐全', () => {
   const caps = makeCaps();
   const service = new TrashService({ fs: createMemFs(), sessionsRoot: '/s', trashRoot: '/t', caps });

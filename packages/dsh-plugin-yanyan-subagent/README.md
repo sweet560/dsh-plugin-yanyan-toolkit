@@ -9,7 +9,7 @@ The third plugin in the "Yanyan Toolkit" aggregate bundle. It lists and manages 
 - Lists every subagent of the current session with name, status (running / idle), mode and an estimated idle duration.
 - A trailing delete button (U+2715 MULTIPLICATION X, a plain Unicode math symbol, not an emoji) deletes one subagent after a confirmation. Running subagents are stopped before deletion. The root session (lead) is never deleted.
 - The bottom "Clean All Idle" button immediately batch-deletes every entry shown as idle (anything not running), regardless of the idle threshold (the threshold only applies to timed auto-clean); its criteria match the list and the host /cleanup route, and it reports the count (or a "nothing to clean" hint).
-- The "Settings" section enables "Auto-clean idle subagents" (off by default), with "Idle over (minutes)" and "Check interval (minutes)". When enabled, each check only deletes idle subagents that reached the threshold; a failed list read is fail-closed (nothing is deleted).
+- The "Settings" section enables "Auto-clean idle subagents" (on by default, idle threshold defaults to 30 minutes and check interval defaults to 10 minutes), with "Idle over (minutes)" and "Check interval (minutes)". When enabled, each check only deletes idle subagents that reached the threshold; a failed list read is fail-closed (nothing is deleted).
 
 ## Delete semantics (physical deletion, irreversible)
 
@@ -60,9 +60,9 @@ The plugin makes a best-effort attempt with a `MutationObserver`: when the offic
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `tabLabel` | Agent Manager | Header tab label, renameable from the overlay |
-| `autoCleanEnabled` | false | Auto-clean switch, off by default |
+| `autoCleanEnabled` | true | Auto-clean switch, on by default |
 | `idleMinutes` | 30 | Idle threshold in minutes (1..10080) |
-| `checkIntervalMin` | 1 | Auto-clean check interval in minutes (1..1440) |
+| `checkIntervalMin` | 10 | Auto-clean check interval in minutes (1..1440) |
 
 ## Tests
 
