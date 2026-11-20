@@ -74,6 +74,24 @@ node --test test/*.test.mjs
 
 ## 版本说明
 
+### 1.4.12 — 2026-11-19（功能性 BUG 修复）
+
+修复「自动清理巡检覆盖不到其他会话的空闲子智能体」的功能性 BUG。
+
+- **现象**：默认开启自动清理、空闲阈值 30 分钟、巡检间隔 10 分钟，重启 1 小时 11 分钟后，留在其他会话的空闲子智能体（丙、丁）依然没被清理。
+- **根因**：
+  - 巡检路径 `autoCleanTick() → loadRows(ctx)` 经 `deriveRootId()` 只读取**当前主视图会话**的 catalog。切到别的会话后，原会话的空闲子智能体永远不在读取范围，`res.unsupported` 时空闲路径还 fail-closed 跳过。
+  - 空闲起点 `shared.firstSeen` 是**内存 Map**，宿主重启即清零，空闲时长反复从零重算，30 分钟阈值迟迟不满足。
+  - `updateIdleTracking()` 旧逻辑里「本批 rows 没出现就删起点」的清理，在多会话逐批巡检时会误删其他会话仍在空闲的行的起点。
+- **修复**：
+  - 新增 `deriveAllRootIds()`：枚举所有含 `subagentCatalog` 投影的会话（主视图排最前、去重），`autoCleanTick()` 改为**逐会话巡检**；`loadRows(ctx, overrideRootId)` 支持按会话读取 catalog。
+  - 空闲起点持久化：`shared.firstSeen` 改用 `loadFirstSeen()` 从 `localStorage`（键 `yanyan-subagent.firstSeen`）恢复，`persistFirstSeen()` 写回；key 统一 `coreId()` 归一化兼容 `session-` 前缀，load 时丢弃非法/超 30 天陈旧记录、写回上限 1000 条。
+  - `updateIdleTracking()` 移除基于单批的「消失清理」，避免多会话巡检互相误删起点；`idleSince()` 同样 `coreId()` 归一化。
+  - `deleteOne(ctx, row, stopActivity, rootIdOverride)` 增加第 4 参数，巡检删除时传入该行所属会话的 rootId，让 host 把 catalog 行从正确的父会话日志退休，并按会话刷新侧边栏；后台巡检不写 `shared.rows/rootId`，不污染当前浮层。
+  - 保留 fail-closed、「运行中绝不碰」与阈值口径。
+- **验证**：新增 6 个回归测试覆盖多会话枚举、空闲起点持久化/归一化/陈旧裁剪、按会话读取与删除；子包 104/104、根包 252/252 全绿。
+- **版本**：仅升子包 `dsh-plugin-yanyan-subagent` → 1.4.12；聚合根包版本号不变。
+
 ### 1.4.10 — 2026-11-18（功能性 BUG 修复）
 
 修复「自动清理空闲子智能体开启后不触发删除」的功能性 BUG。

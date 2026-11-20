@@ -589,3 +589,82 @@ test('updateIdleTracking：用统一运行中判定记录官方行的空闲起�
   assert.ok(!/r\.activity === 'inactive'/.test(fn),
     '不应只认 activity===inactive，否则官方行从不记录空闲起点、阈值永不满足');
 });
+
+// ───────────────── 自动清理覆盖多会话 + 空闲起点持久化（用户实测缺陷） ─────────────────
+// 缺陷：巡检只看当前主视图会话，切会话后原会话的空闲子智能体永远巡检不到；
+// 且 firstSeen 是内存 Map，重启清零 → 空闲时长反复从零重算、阈值永不满足。
+
+test('deriveAllRootIds：枚举所有含 subagentCatalog 投影的会话，主视图排最前', () => {
+  const fn = extractFn(source, 'deriveAllRootIds');
+  const { deriveAllRootIds } = vm.runInNewContext(fn + '\n;({ deriveAllRootIds })', {}, { filename: 'client-all-roots.js' });
+  const ctx = {
+    sessions: { list: { getSnapshot() {
+      return {
+        byId: {
+          s1: { id: 's1', retainedBy: { mainView: 1 } }, // 主视图
+          s2: { id: 's2', retainedBy: { mainView: 0 } },
+        },
+        projectionsBySession: {
+          s1: { values: { subagentCatalog: [] } },
+          s2: { values: { subagentCatalog: [] } },
+          s3: { values: { subagentCatalog: [] } },
+          s4: { values: {} }, // 无 subagentCatalog → 应排除
+        },
+      };
+    } } },
+  };
+  const out = deriveAllRootIds(ctx);
+  assert.deepEqual(JSON.parse(JSON.stringify(out)), ['s1', 's2', 's3'],
+    '主视图 s1 排最前，其余含 catalog 的会话依次纳入，无 catalog 的 s4 排除');
+});
+
+test('loadFirstSeen：从 localStorage 恢复空闲起点，coreId 归一化并丢弃非法/陈旧记录', () => {
+  const now = Date.now();
+  const saved = {
+    'session-aaa': now - 1000,                     // 合法，带 session- 前缀
+    bbb: now - 2000,                               // 合法
+    ccc: 'not-a-number',                           // 非法时间戳 → 丢弃
+    stale: now - 31 * 24 * 60 * 60 * 1000,         // 超 30 天 → 丢弃
+  };
+  const code = extractFn(source, 'coreId') + '\n'
+    + extractFn(source, 'loadFirstSeen') + '\n'
+    + '\n;({ loadFirstSeen })';
+  const sandbox = {
+    LS_FIRST_SEEN: 'yanyan-subagent.firstSeen',
+    readLS: (k) => (k === 'yanyan-subagent.firstSeen' ? JSON.stringify(saved) : null),
+  };
+  const { loadFirstSeen } = vm.runInNewContext(code, sandbox, { filename: 'client-first-seen.js' });
+  const map = loadFirstSeen();
+  assert.equal(map.get('aaa'), now - 1000, 'session- 前缀应归一化为 aaa');
+  assert.equal(map.get('bbb'), now - 2000);
+  assert.equal(map.has('ccc'), false, '非法时间戳应丢弃');
+  assert.equal(map.has('stale'), false, '超 30 天陈旧记录应丢弃');
+});
+
+test('空闲起点持久化：shared 用 loadFirstSeen 初始化，updateIdleTracking 变更后写回', () => {
+  const src = source;
+  assert.match(src, /firstSeen:\s*loadFirstSeen\(\)/, 'shared.firstSeen 应从 localStorage 恢复');
+  const track = extractFn(src, 'updateIdleTracking');
+  assert.match(track, /coreId\(r\.id\)/, 'key 应 coreId 归一化，兼容 session- 前缀');
+  assert.match(track, /persistFirstSeen\(\)/, '空闲起点变更应写回 localStorage');
+  assert.ok(!/splice\(|firstSeen\.forEach\(/.test(track),
+    '逐会话巡检时不应基于单批 rows 做消失清理，否则误删其他会话的起点');
+});
+
+test('loadRows：支持 overrideRootId，巡检按会话读取 catalog', () => {
+  const fn = extractFn(source, 'loadRows');
+  assert.match(fn, /function loadRows\(ctx, overrideRootId\)/, '应支持覆盖 rootId');
+  assert.match(fn, /overrideRootId \|\| deriveRootId\(ctx\)/, '未覆盖时才回落当前主视图会话');
+});
+
+test('autoCleanTick：遍历所有会话巡检，删除时传入所属会话 rootId，不污染当前视图', () => {
+  const fn = extractFn(source, 'autoCleanTick');
+  assert.match(fn, /deriveAllRootIds\(ctx\)/, '应枚举所有含 subagentCatalog 的会话');
+  assert.match(fn, /rootIds\.forEach/, '应逐会话巡检');
+  assert.match(fn, /loadRows\(ctx, rid\)/, '应按会话覆盖 catalog 数据');
+  assert.match(fn, /deleteOne\(ctx, r, false, res\.rootId\)/, '删除时应传该行所属会话 rootId');
+  assert.match(fn, /refreshSidebar\(ctx, res\.rootId\)/, '应按会话刷新侧边栏');
+  assert.match(fn, /idleFilterLocal\(/, '仍应用空闲过滤');
+  assert.match(fn, /idleMinutes:/, '仍应用阈值契约');
+  assert.ok(!/shared\.rows\s*=/.test(fn), '后台巡检不应污染当前视图 rows');
+});

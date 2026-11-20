@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { readArchivedIds, readArchiveLedger, statusLabels, readSessionIndexIds } from '../lib/native-session-source.js';
+import { readArchivedIds, readArchiveLedger, statusLabels, readSessionIndexIds, readSessionDirSizes, readFeedStatuses } from '../lib/native-session-source.js';
 
 function memFs(files = {}) {
   return {
@@ -130,4 +130,131 @@ test('readSessionIndexIds 读取原生标题 rows.title.val / titleInput 回退 
 
 test('readSessionIndexIds 目录不存在时返回空 Map（fail-closed）', () => {
   assert.equal(readSessionIndexIds(memFs({}), '/home').size, 0);
+});
+
+test('readSessionIndexIds 双向登记 id：裸 UUID 文件名也能被 session- 前缀的行命中', () => {
+  const proj = join('/home', 'storages', 'session_projcache', 'sessions');
+  const fs = memFs({
+    // 文件名是裸 UUID（这是磁盘上 958/1031 的真实形态），标题数据齐全
+    [join(proj, '060b056e-7e68-4fba-8cdf-0b5d6f012d14.json')]: JSON.stringify({
+      version: 7,
+      record: {
+        identity: { createdAt: 1, cwd: '/work/x' },
+        rows: {
+          title: { ver: 1, seq: 9, val: '核实DSH消息去重过滤逻辑' },
+          sessionListMetadata: { val: { blank: false } },
+        },
+      },
+    }),
+  });
+  const m = readSessionIndexIds(fs, '/home');
+  const bare = '060b056e-7e68-4fba-8cdf-0b5d6f012d14';
+  const canonical = 'session-' + bare;
+  // 两种拼写必须都指向同一条记录，避免标题/blank 因前缀不一致而丢失
+  assert.equal(m.get(bare).title, '核实DSH消息去重过滤逻辑');
+  assert.equal(m.get(canonical).title, '核实DSH消息去重过滤逻辑');
+  assert.equal(m.get(canonical).blank, false);
+});
+
+// 带 statSync 的内存 fs，用于物理目录大小扫描测试。
+function sizeFs(entries) {
+  const norm = (s) => String(s).replace(/\\/g, '/').replace(/\/$/, '');
+  const dirs = new Set(entries.map((e) => norm(e.path)));
+  return {
+    existsSync: (p) => {
+      const np = norm(p);
+      return dirs.has(np) || [...dirs].some((d) => d.startsWith(np));
+    },
+    readdirSync: (p) => {
+      const prefix = norm(p) + '/';
+      const names = new Set();
+      for (const e of entries) {
+        const ne = norm(e.path);
+        if (!ne.startsWith(prefix)) continue;
+        const rest = ne.slice(prefix.length);
+        if (rest && !rest.includes('/')) names.add(rest);
+      }
+      return [...names];
+    },
+    statSync: (p) => {
+      const np = norm(p);
+      const e = entries.find((x) => norm(x.path) === np);
+      if (e) return { isDirectory: () => !!e.dir, size: e.size || 0 };
+      if (dirs.has(np)) return { isDirectory: () => true, size: 0 };
+      throw new Error('ENOENT ' + p);
+    },
+  };
+}
+
+test('readSessionDirSizes 扫描物理目录大小，并双向登记 id', () => {
+  const root = join('/home', 'sessions');
+  const proj = join(root, 'project-a');
+  const sessDir = join(proj, 'session-aaa');
+  const bareDir = join(proj, 'bbb-plain');
+  const fs = sizeFs([
+    { path: root, dir: true },
+    { path: proj, dir: true },
+    { path: sessDir, dir: true },
+    { path: join(sessDir, 'session.v4.jsonl.zstd'), size: 1000 },
+    { path: join(sessDir, 'meta.bin'), size: 240 },
+    { path: bareDir, dir: true },
+    { path: join(bareDir, 'session.v4.jsonl.zstd'), size: 500 },
+  ]);
+  const sizes = readSessionDirSizes(fs, '/home');
+  // canonical id 命中（session- 前缀）
+  assert.equal(sizes.get('session-aaa'), 1240);
+  // 裸 UUID 目录段补前缀后命中，同时保留裸拼写
+  assert.equal(sizes.get('session-bbb-plain'), 500);
+  assert.equal(sizes.get('bbb-plain'), 500);
+});
+
+test('readSessionDirSizes 会话根目录不存在时返回空 Map（fail-closed）', () => {
+  assert.equal(readSessionDirSizes(sizeFs([]), '/home').size, 0);
+});
+
+// 构造一个最小 sessionController：list() 返回 DSH 原生形状的行——
+// 标题藏在 projections.values.title，没有顶层 title 字段。
+function fakeController(items) {
+  return { list: async () => ({ items }) };
+}
+
+test('readFeedStatuses 读取 projections.values.title（纯运行时会话标题）', async () => {
+  const ctx = { get: (name) => name === 'sessionController' ? fakeController([
+    {
+      sessionId: 'session-runtime',
+      running: true,
+      blank: false,
+      // DSH 原生结构：标题在 title 投影，无顶层 title
+      projections: { kind: 'sequenced', asOfSeq: 42, values: { title: '会话显示实时更新修复' } },
+    },
+    {
+      sessionId: 'session-no-title',
+      blank: true,
+      // title 投影存在但值为 null
+      projections: { kind: 'sequenced', asOfSeq: 8, values: { title: null } },
+    },
+  ]) : null };
+  const feed = await readFeedStatuses(ctx);
+  assert.equal(feed.get('session-runtime').title, '会话显示实时更新修复');
+  assert.equal(feed.get('session-runtime').running, true);
+  assert.equal(feed.get('session-no-title').title, null);
+  assert.equal(feed.get('session-no-title').blank, true);
+});
+
+test('readFeedStatuses 兼容顶层 title/displayTitle，忽略空串', async () => {
+  const ctx = { get: (name) => name === 'sessionController' ? fakeController([
+    { sessionId: 's-top', title: '顶层标题' },
+    { sessionId: 's-display', displayTitle: '显示标题' },
+    { sessionId: 's-empty', title: '   ', projections: { values: { title: '投影优先' } } },
+  ]) : null };
+  const feed = await readFeedStatuses(ctx);
+  assert.equal(feed.get('s-top').title, '顶层标题');
+  assert.equal(feed.get('s-display').title, '显示标题');
+  // 顶层空串被忽略，回退到投影值
+  assert.equal(feed.get('s-empty').title, '投影优先');
+});
+
+test('readFeedStatuses 无 sessionController 时返回空 Map（fail-closed）', async () => {
+  assert.equal((await readFeedStatuses({ get: () => null })).size, 0);
+  assert.equal((await readFeedStatuses(null)).size, 0);
 });

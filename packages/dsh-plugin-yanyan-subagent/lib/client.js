@@ -38,6 +38,8 @@
       var LS_AUTO = 'yanyan-subagent.autoCleanEnabled';
       var LS_IDLE = 'yanyan-subagent.idleMinutes';
       var LS_INTERVAL = 'yanyan-subagent.checkIntervalMin';
+      // 空闲起点持久化：重启后继续累计空闲时长，不再从零开始计时。
+      var LS_FIRST_SEEN = 'yanyan-subagent.firstSeen';
       // 已彻底删除的 id 清单。subagentCatalog 由父会话日志的 subagent/catalog
       // 事件 append-only 重建（官方 dsh-chunked-list 仅追加），删目录/归档都
       // 无法移除引用：宿主下次 refreshProjections 会把条目带回来。只有把 id
@@ -255,6 +257,38 @@
         try { root.localStorage.setItem(key, String(val)); } catch (e) {}
       }
 
+      // 空闲起点持久化：内存 Map 重启即清零，导致重启后空闲时长从零重算、
+      // 30 分钟阈值迟迟不满足。落到 localStorage 后跨重启继续累计。
+      // key 统一用 coreId 归一化，兼容 catalog 行带/不带 session- 前缀两种写法。
+      function loadFirstSeen() {
+        var map = new Map();
+        try {
+          var raw = readLS(LS_FIRST_SEEN);
+          var obj = raw ? JSON.parse(raw) : null;
+          if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+            var now = Date.now();
+            for (var k in obj) {
+              var ts = obj[k];
+              // 丢弃非法或超过 30 天的陈旧记录，避免历史垃圾导致误删。
+              if (typeof ts === 'number' && isFinite(ts) && ts > 0 && now - ts < 30 * 24 * 60 * 60 * 1000) {
+                map.set(coreId(k), ts);
+              }
+            }
+          }
+        } catch (e) {}
+        return map;
+      }
+      function persistFirstSeen() {
+        try {
+          var obj = {};
+          var n = 0;
+          shared.firstSeen.forEach(function (ts, id) {
+            if (n++ < 1000) obj[id] = ts; // 上限，避免 localStorage 无限增长
+          });
+          writeLS(LS_FIRST_SEEN, JSON.stringify(obj));
+        } catch (e) {}
+      }
+
       // ───────────────── 已删除 id 的持久化隐藏清单 ─────────────────
       // catalog 的 childId 可能带或不带 `session-` 前缀（同一会话在父 catalog
       // 里是裸 uuid，在归档清单里是 session-uuid）。用「去前缀后的核心 id」
@@ -414,7 +448,8 @@
         rows: [],
         rootId: '',
         unsupported: false,
-        firstSeen: new Map(), // id -> 首次观察到 inactive 的时刻
+        // 空闲起点从 localStorage 恢复，重启后继续累计空闲时长；不再从零开始。
+        firstSeen: loadFirstSeen(), // id -> 首次观察到空闲的时刻（coreId 归一化）
         rowStatus: {},        // id -> {state:'deleting'|'deleted'|'failed', message?}
         cleanStatus: '',
         settingsStatus: '',
@@ -482,6 +517,37 @@
         return '';
       }
 
+      // 自动清理用：枚举所有含 subagentCatalog 投影的会话，而非只看当前主视图。
+      // 主视图会话排最前（去重），其余会话依次纳入，确保切到别的会话时，
+      // 留在原会话的空闲子智能体依然能被巡检到。
+      function deriveAllRootIds(ctx) {
+        var ids = [];
+        try {
+          var snap = ctx.sessions.list.getSnapshot();
+          var byId = snap && snap.byId;
+          if (byId) {
+            for (var k in byId) {
+              var row = byId[k];
+              if (row && row.retainedBy && (row.retainedBy.mainView || 0) > 0) {
+                var main = row.id || k;
+                if (main) ids.push(main);
+                break;
+              }
+            }
+          }
+          var pbs = snap && snap.projectionsBySession;
+          if (pbs) {
+            for (var sid in pbs) {
+              var p = pbs[sid];
+              if (p && p.values && p.values.subagentCatalog != null && ids.indexOf(sid) < 0) {
+                ids.push(sid);
+              }
+            }
+          }
+        } catch (e) {}
+        return ids;
+      }
+
       // 返回 null 表示本地投影里没有 subagentCatalog 键（需回退 host /list）；
       // 返回数组（含空数组）表示投影存在、数据可用。
       function readLocalCatalog(ctx, rootId) {
@@ -539,8 +605,10 @@
           });
       }
 
-      function loadRows(ctx) {
-        var rootId = deriveRootId(ctx);
+      // overrideRootId：自动清理逐会话巡检时显式指定要读哪个会话的 catalog；
+      // 不传则沿用旧行为（当前主视图会话），供渲染/手动刷新使用。
+      function loadRows(ctx, overrideRootId) {
+        var rootId = overrideRootId || deriveRootId(ctx);
         var local = readLocalCatalog(ctx, rootId);
         var result;
         if (local !== null) {
@@ -565,29 +633,35 @@
         });
       }
 
-      // 空闲起点：官方没有 idleSince / lastActiveAt 字段，用内存 Map 记首次观察到
-      // inactive 的时刻；变回 running 就删除该记录。
+      // 空闲起点：官方没有 idleSince / lastActiveAt 字段，记首次观察到空闲的时刻；
+      // 变回 running 就删除该记录。key 用 coreId 归一化，兼容 catalog 行的
+      // session- 前缀写法，保证自动清理（遍历多会话）与渲染（单会话）口径一致。
+      // 记录持久化到 localStorage，重启后跨会话继续累计空闲时长。
       function updateIdleTracking(rows) {
-        var alive = {};
+        var changed = false;
         for (var i = 0; i < rows.length; i++) {
           var r = rows[i];
           if (!r || !r.id || r.kind === 'diagnostic') continue;
-          alive[r.id] = true;
+          var key = coreId(r.id);
           // 用统一判定：官方 catalog 行没有 activity 字段，旧逻辑只认
           // activity==='inactive' 会导致官方行从不记录 firstSeen，idleSince
           // 回退成 Date.now()，空闲阈值永远无法满足、定时清理筛不到目标。
-          if (isRowRunning(r)) shared.firstSeen.delete(r.id);
-          else if (!shared.firstSeen.has(r.id)) {
-            shared.firstSeen.set(r.id, Date.now());
+          if (isRowRunning(r)) {
+            if (shared.firstSeen.delete(key)) changed = true;
+          } else if (!shared.firstSeen.has(key)) {
+            shared.firstSeen.set(key, Date.now());
+            changed = true;
           }
         }
-        // 清理已消失的 id，避免 Map 无限增长。
-        shared.firstSeen.forEach(function (_v, id) {
-          if (!alive[id]) shared.firstSeen.delete(id);
-        });
+        // 注意：这里刻意不做「本批 rows 里没出现就删起点」的清理。自动清理会
+        // 逐会话巡检，每次只传一个会话的行，基于单批做消失清理会误删其他会话
+        // 仍在空闲的子智能体的起点。无限增长由 persistFirstSeen 上限与
+        // loadFirstSeen 的 30 天过期裁剪兜底。
+        if (changed) persistFirstSeen();
       }
       function idleSince(id) {
-        return shared.firstSeen.has(id) ? shared.firstSeen.get(id) : Date.now();
+        var key = coreId(id);
+        return shared.firstSeen.has(key) ? shared.firstSeen.get(key) : Date.now();
       }
       function idleMs(id) { return Date.now() - idleSince(id); }
 
@@ -686,14 +760,18 @@
       // 归档台账 / mnemon 虚拟目录）。成功后把 id 写入本地隐藏清单并从列表移除，
       // 因为 append-only catalog 会在下次刷新时被宿主从日志重建。
       // 每行独立 try/catch 隔离；root 会话绝不删；running 传 stopActivity:true。
-      function deleteOne(ctx, row, stopActivity) {
+      // rootIdOverride：自动清理逐会话巡检时传入该行所属会话的 rootId，
+      // 让 host 把 catalog 行从正确的父会话日志里退休；不传则沿用当前视图的
+      // shared.rootId（手动删除 / 批量清理路径不变）。
+      function deleteOne(ctx, row, stopActivity, rootIdOverride) {
         var id = row && row.id;
         if (!id || id === shared.rootId || !row || row.kind === 'diagnostic') return Promise.resolve();
+        var rootForPurge = rootIdOverride || shared.rootId;
         shared.rowStatus[id] = { state: 'deleting' };
         renderAll();
         var body = {
           sessionId: id,
-          rootSessionId: shared.rootId || '',
+          rootSessionId: rootForPurge || '',
           stopActivity: !!stopActivity,
         };
         return postJson(ROUTE_BASE + '/purge', body)
@@ -719,7 +797,7 @@
           .then(function () {
             renderAll();
             // 侧边栏残留行同步消失：refresh() + refreshProjections() 一起调。
-            refreshSidebar(ctx, shared.rootId);
+            refreshSidebar(ctx, rootForPurge);
           });
       }
 
@@ -794,29 +872,38 @@
 
       // 自动清理巡检：live check 失败（unsupported）时 fail-closed 不删；
       // running 绝不碰（idleFilterLocal 只排除运行中）。
+      // 遍历所有含 subagentCatalog 投影的会话，而非只看当前主视图——否则切到
+      // 别的会话后，留在原会话的空闲子智能体永远巡检不到（用户实测过的缺陷）。
       function autoCleanTick(ctx) {
         if (!shared.autoCleanEnabled) return;
-        return loadRows(ctx).then(function (res) {
-          if (res.unsupported || !res.rows.length) return; // fail-closed
-          shared.rootId = res.rootId;
-          shared.rows = filterDeleted(res.rows);
-          updateIdleTracking(shared.rows);
-          var targets = idleFilterLocal(shared.rows, {
-            rootId: res.rootId,
-            idleMinutes: shared.idleMinutes,
-            now: Date.now(),
-            idleSince: idleSince,
+        var rootIds = deriveAllRootIds(ctx);
+        if (!rootIds.length) rootIds = ['']; // 兜底：仍尝试旧的单会话路径
+        var chain = Promise.resolve();
+        rootIds.forEach(function (rid) {
+          chain = chain.then(function () {
+            return loadRows(ctx, rid).then(function (res) {
+              if (res.unsupported || !res.rows.length) return; // fail-closed
+              updateIdleTracking(res.rows);
+              var targets = idleFilterLocal(res.rows, {
+                rootId: res.rootId,
+                idleMinutes: shared.idleMinutes,
+                now: Date.now(),
+                idleSince: idleSince,
+              });
+              var delChain = Promise.resolve();
+              targets.forEach(function (r) {
+                delChain = delChain.then(function () { return deleteOne(ctx, r, false, res.rootId); });
+              });
+              // 每个会话清完同步刷新该会话侧边栏（与手动删除 / 批量清理一致）。
+              return delChain.then(function () {
+                refreshSidebar(ctx, res.rootId);
+              });
+            });
           });
-          renderAll();
-          var chain = Promise.resolve();
-          targets.forEach(function (r) {
-            chain = chain.then(function () { return deleteOne(ctx, r, false); });
-          });
-          return chain.then(function () {
-            // 自动清理后同步刷新侧边栏（与手动删除 / 批量清理一致）。
-            refreshSidebar(ctx, res.rootId);
-          });
-        }).catch(function () {});
+        });
+        // 不写 shared.rows/rootId：巡检是后台行为，多会话数据不应污染当前浮层；
+        // 删除行的隐藏清单已更新，数据变化订阅回调会自然重绘当前视图。
+        return chain.then(function () { renderAll(); }).catch(function () {});
       }
 
       function reconfigureInterval(ctx) {

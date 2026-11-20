@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## 未发布
+
+- **移除占位子包 `dsh-plugin-yanyan-trash`**：该子包此前已在 `cordis.patch.yml` 置为 disabled，其回收站能力（原子写 / 串行锁 / 归档闸门 / 级联 fail-closed）已完整融入 `dsh-plugin-yanyan-session-hub` 的「回收站」tab。本次删除整个子包目录，并同步清理 `package.json` dependencies、`cordis.patch.yml` loader 行（7 减为 6）、`lib/index.js` SUBPACKAGES，以及相关测试断言与 README 说明。回收站功能不受影响；聚合包根 `lib/session-*.js` 服务 / 路由模块保留，仍由 session-hub 复用。
+- **回归守护**：`test/session-trash-host.test.mjs` 保留聚合包服务 / 路由测试，并把回收站变更后的宿主刷新守护（`_refreshHostSessions` / `sessions.refresh`）重定向到 session-hub 的 client.js，防止 m00024（恢复延迟约 2 分钟）回归。
+- **修复批量删除「混合选中」异常（m00490）**：选中已归档 + 未归档会话批量删除时，原确认文案一律说「删除 N 个未归档会话」且删除后不清选中，导致残留 id 再次删除全部落入 trashMove 而「没反应 / 反复弹同样 N 条」，未归档会话还会经归档闸门被错误标成「已归档」。三处修复：① 批量删除成功后清空 `selectedIds`；② 新增 `hub.deleteMixedConfirm` 三态文案（全归档 / 全未归档 / 混合分别提示两组数量与后果）；③ `service.list` 四条列表路径统一过滤已在回收站的会话（`isTrashed` 只读 fail-closed），使其只出现在回收站 tab。新增 3 条回归测试，全量 255/255 通过。
+
 ## 1.4.12 — 2026-11-18（正式发布）
 
 > 会话管理中心（Session Hub）Phase 1/2/3 首次随聚合包发布，并修复会话标题实时更新、增强回收站、标签体系纳入 DSH 状态标签。

@@ -33,6 +33,10 @@ window.__ModuleLoader__.load({
     var SECTION_ORDER = 27; // 回收站是 26，本区块紧随其后。
     var NS = "dsh-yanyan-session-hub";
     var DEFAULT_TIMEOUT_MS = 15000;
+    // 批量删除/移动/清除：后端要对每条会话跑解档 IPC + 回收站 manifest + 物理目录操作，
+    // 一次处理几十条时可能超过默认 15s。前端用更宽的预算，避免 AbortSignal.timeout
+    // 抛 "signal timed out"（真机 m02109：勾选 37 条批量删除整批超时）。
+    var BATCH_TIMEOUT_MS = 60000;
     var UNFILED = "@unfiled";
     var TRASH = "@trash";
     // DSH 状态标签：与后端 statusLabels() 的全部输出 + service 层补的「空会话」一致。
@@ -61,7 +65,7 @@ window.__ModuleLoader__.load({
     }
 
     // ---------- 内联 CSS（顶部 toolbar/表头吸顶 + 表格 + 抽屉） ----------
-    var CSS = ".ysh-root{color:var(--dsw-alias-label-primary,#1f2328);display:flex;flex-direction:column;gap:12px;font-size:13px;line-height:1.5;max-width:100%}.ysh-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;position:sticky;top:0;z-index:9;background:var(--dsw-alias-bg-layer-1,#fff);padding:4px 0}.ysh-title{font-size:15px;font-weight:600}.ysh-count{color:var(--dsw-alias-label-secondary,#57606a);font-size:12px}.ysh-btn{border:1px solid var(--dsw-alias-border-l2,#d0d7de);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);cursor:pointer;border-radius:8px;padding:5px 12px;transition:background-color .14s,border-color .14s}.ysh-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,#0000000d)}.ysh-btn:disabled{opacity:.45;cursor:default}.ysh-btn-primary{background:var(--dsw-alias-button-primary-fill,#4a6cf7);color:var(--dsw-alias-label-primary-inverted,#fff);border-color:transparent}.ysh-btn-ghost{background:transparent}.ysh-btn-sm{padding:3px 9px;font-size:12px}.ysh-input{border:1px solid var(--dsw-alias-border-l2,#d0d7de);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);border-radius:8px;padding:5px 10px;font-size:13px}.ysh-input:focus-visible,.ysh-btn:focus-visible,.ysh-tab:focus-visible,.ysh-select:focus-visible{outline:2px solid color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 60%,transparent);outline-offset:1px}.ysh-search{flex:1;min-width:170px}.ysh-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea);position:sticky;top:38px;z-index:8;background:var(--dsw-alias-bg-layer-1,#fff);padding-top:2px}.ysh-tab{border:1px solid transparent;border-bottom:0;background:transparent;color:var(--dsw-alias-label-secondary,#57606a);cursor:pointer;border-radius:8px 8px 0 0;padding:7px 14px;font-size:13px;font-weight:500;transition:background-color .14s,color .14s}.ysh-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-tab-active{background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 10%,transparent);color:var(--dsw-alias-button-primary-fill,#4a6cf7);font-weight:600}.ysh-tab-icon{margin-right:5px;opacity:.85}.ysh-page{padding-top:2px}.ysh-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.ysh-card{border:1px solid var(--dsw-alias-border-l1,#e1e5ea);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:var(--dsw-shadow-lv1,0 1px 3px #00000014);border-radius:10px;padding:14px}.ysh-stat{display:flex;flex-direction:column;gap:4px}.ysh-stat-num{font-size:26px;font-weight:700;line-height:1.1}.ysh-stat-label{color:var(--dsw-alias-label-secondary,#57606a);font-size:12px}.ysh-shortcuts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.ysh-section{border:1px solid var(--dsw-alias-border-l1,#e1e5ea);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:var(--dsw-shadow-lv1,0 1px 3px #00000014);border-radius:10px;overflow:hidden}.ysh-section-head{padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea);font-weight:600;font-size:12px;color:var(--dsw-alias-label-secondary,#57606a);display:flex;align-items:center;justify-content:space-between;gap:6px}.ysh-scroll{max-height:540px;overflow-y:auto;overflow-x:hidden}.ysh-table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;table-layout:fixed}.ysh-table th,.ysh-table td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea);vertical-align:middle;overflow-wrap:anywhere}.ysh-sticky-head{position:sticky;top:0;z-index:5}.ysh-toolbar-row>td{background:var(--dsw-alias-bg-layer-1,#fff);padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea)}.ysh-head-row>th{background:var(--dsw-alias-bg-layer-2,#f6f8fa);color:var(--dsw-alias-label-secondary,#57606a);font-size:12px;font-weight:600;white-space:nowrap;border-bottom:1px solid var(--dsw-alias-border-l2,#d0d7de)}.ysh-row{cursor:pointer}.ysh-row:hover>td{background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-row-sel>td{background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 9%,transparent)}.ysh-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ysh-toolbar .ysh-select{width:auto;min-width:110px}.ysh-cell-title{font-weight:600;overflow-wrap:anywhere}.ysh-cell-meta{color:var(--dsw-alias-label-secondary,#57606a);font-size:11px;margin-top:2px}.ysh-chip{display:inline-flex;align-items:center;gap:3px;background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 12%,transparent);border-radius:10px;padding:1px 7px;font-size:11px;margin:1px 3px 1px 0}.ysh-status-chip{display:inline-flex;align-items:center;background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#1a7f37) 14%,transparent);color:var(--dsw-alias-state-success-primary,#1a7f37);border-radius:10px;padding:1px 7px;font-size:11px;margin:1px 3px 1px 0;font-weight:600}.ysh-sc-normal{background:color-mix(in srgb,#1a7f37 15%,transparent);color:#1a7f37}.ysh-sc-subagent{background:color-mix(in srgb,#0969da 14%,transparent);color:#0969da}.ysh-sc-running{background:color-mix(in srgb,#cf222e 14%,transparent);color:#cf222e}.ysh-sc-archived{background:color-mix(in srgb,#8250df 15%,transparent);color:#8250df}.ysh-sc-current{background:color-mix(in srgb,#bf8700 16%,transparent);color:#9a6700}.ysh-sc-idle{background:color-mix(in srgb,#57606a 12%,transparent);color:#57606a}.ysh-sc-empty{background:color-mix(in srgb,#8c959f 14%,transparent);color:#8c959f;border:1px dashed #8c959f}.ysh-trash-restore{color:#1a7f37;border-color:#1a7f37}.ysh-trash-cascade{color:#9a6700;border-color:#9a6700}.ysh-trash-purge{color:#d64545;border-color:#d64545}.ysh-id{font-family:ui-monospace,monospace;font-size:10px;color:var(--dsw-alias-label-tertiary,#8c959f);overflow-wrap:anywhere}.ysh-empty{color:var(--dsw-alias-label-tertiary,#8c959f);text-align:center;padding:28px 14px;font-size:12px}.ysh-note{color:var(--dsw-alias-label-secondary,#57606a);font-size:11px;line-height:1.5}.ysh-filter-chip{display:inline-flex;align-items:center;gap:5px;background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 12%,transparent);border-radius:10px;padding:2px 8px;font-size:12px}.ysh-backdrop{position:fixed;inset:0;background:#00000066;z-index:40;display:flex;justify-content:center;align-items:center;padding:24px;animation:ysh-fade .14s ease-out}.ysh-drawer{width:460px;max-width:92vw;max-height:82vh;background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 14px 44px #00000040;border:1px solid var(--dsw-alias-border-l1,#e1e5ea);border-radius:14px;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px;animation:ysh-slide .18s ease-out}.ysh-drawer-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.ysh-drawer-title{font-size:15px;font-weight:600}.ysh-close{border:0;background:transparent;cursor:pointer;font-size:20px;line-height:1;color:var(--dsw-alias-label-secondary,#57606a);padding:2px 8px;border-radius:6px}.ysh-close:hover{background:var(--dsw-alias-interactive-bg-hover,#0000000d)}.ysh-field{display:flex;flex-direction:column;gap:5px}.ysh-field-label{font-size:11px;font-weight:600;color:var(--dsw-alias-label-secondary,#57606a)}.ysh-tagrow{display:flex;flex-wrap:wrap;gap:5px}.ysh-tag{display:inline-flex;align-items:center;gap:4px;background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 12%,transparent);border-radius:10px;padding:2px 8px;font-size:12px}.ysh-tag-x{border:0;background:none;cursor:pointer;color:var(--dsw-alias-label-secondary,#57606a);font-size:13px;line-height:1}.ysh-tag-x:hover{color:var(--dsw-alias-state-error-primary,#d64545)}.ysh-addtag{display:flex;gap:6px}.ysh-addtag .ysh-input{min-width:0;flex:1;width:100%}.ysh-select{width:100%;border:1px solid var(--dsw-alias-border-l2,#d0d7de);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);border-radius:8px;padding:5px 8px;font-size:13px}.ysh-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;padding:12px}.ysh-folder-card{border:1px solid var(--dsw-alias-border-l1,#e1e5ea);border-radius:9px;padding:12px;display:flex;flex-direction:column;gap:8px;cursor:pointer;transition:border-color .14s,background-color .14s}.ysh-folder-card:hover{border-color:var(--dsw-alias-button-primary-fill,#4a6cf7);background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-folder-name{font-weight:600;overflow-wrap:anywhere}.ysh-folder-meta{color:var(--dsw-alias-label-secondary,#57606a);font-size:11px}.ysh-folder-actions{display:flex;gap:6px;flex-wrap:wrap}.ysh-tagcloud{display:flex;flex-wrap:wrap;gap:10px;padding:16px}.ysh-tagbig{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--dsw-alias-border-l1,#e1e5ea);border-radius:20px;padding:7px 14px;cursor:pointer;font-size:13px;transition:border-color .14s,background-color .14s}.ysh-tagbig:hover{border-color:var(--dsw-alias-button-primary-fill,#4a6cf7);background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-tagbig-num{color:var(--dsw-alias-label-secondary,#57606a);font-size:11px}.ysh-form{display:flex;gap:6px;padding:12px;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea)}.ysh-form .ysh-input{min-width:0;flex:1}.ysh-status{padding:8px 10px;border-radius:8px;font-size:12px}.ysh-status-err{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d64545) 8%,transparent);color:var(--dsw-alias-state-error-primary,#d64545)}.ysh-confirm{margin:10px 12px}.ysh-hint{padding:24px;text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center}.ysh-search-panel{border:1px solid var(--dsw-alias-border-l1,#e1e5ea);background:var(--dsw-alias-bg-layer-2,#f6f8fa);border-radius:10px;padding:0}.ysh-results-head{position:sticky;top:0;z-index:2;background:var(--dsw-alias-bg-layer-2,#f6f8fa);padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea)}.ysh-results-scroll{max-height:520px;overflow-y:auto;overflow-x:hidden;padding:2px 12px 8px}.ysh-index-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;font-size:11px;color:var(--dsw-alias-label-secondary,#57606a)}.ysh-index-track{flex:1;min-width:80px;height:5px;border-radius:3px;background:var(--dsw-alias-border-l1,#e1e5ea);overflow:hidden}.ysh-index-fill{height:100%;background:var(--dsw-alias-button-primary-fill,#4a6cf7);transition:width .2s}.ysh-hit{padding:8px 0;border-bottom:1px dashed var(--dsw-alias-border-l1,#e1e5ea)}.ysh-hit:last-child{border-bottom:0}.ysh-hit-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.ysh-hit-title{font-weight:600;cursor:pointer;overflow-wrap:anywhere}.ysh-hit-title:hover{color:var(--dsw-alias-button-primary-fill,#4a6cf7)}.ysh-hit-snippet{margin-top:4px;color:var(--dsw-alias-label-secondary,#57606a);font-size:12px;line-height:1.55;overflow-wrap:anywhere}.ysh-hit-meta{font-size:10px;color:var(--dsw-alias-label-tertiary,#8c959f)}.ysh-mark{background:#fff2a8;color:inherit;border-radius:2px;padding:0 1px;font-weight:600}.ysh-search-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:9px 12px;border:1px solid var(--dsw-alias-border-l1,#e1e5ea);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:var(--dsw-shadow-lv1,0 1px 3px #00000014);border-radius:10px;position:sticky;top:76px;z-index:7}.ysh-search-wrap{position:relative;flex:1;min-width:180px;display:flex;align-items:center}.ysh-search-wrap .ysh-search{width:100%;padding-right:32px;min-width:0}.ysh-search-clear-x{position:absolute;right:7px;top:50%;transform:translateY(-50%);border:0;background:transparent;cursor:pointer;color:var(--dsw-alias-label-secondary,#57606a);font-size:19px;line-height:1;padding:0 5px;border-radius:4px}.ysh-search-clear-x:hover{background:var(--dsw-alias-interactive-bg-hover,#0000000d);color:var(--dsw-alias-state-error-primary,#d64545)}.ysh-status-ok{background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#1a7f37) 10%,transparent);color:var(--dsw-alias-state-success-primary,#1a7f37)}.ysh-filter-row{display:flex;gap:8px;flex-wrap:nowrap;align-items:center;flex:0 0 100%;min-width:0}.ysh-filter-row .ysh-select{width:auto;min-width:110px}.ysh-card-row>td{border-bottom:0;padding:5px 8px!important}.ysh-card-row .ysh-card{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;border-radius:10px;cursor:default;transition:border-color .14s,background-color .14s}.ysh-card-row .ysh-card:hover{border-color:var(--dsw-alias-button-primary-fill,#4a6cf7)}.ysh-card-row .ysh-card-sel{background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 8%,transparent);border-color:var(--dsw-alias-button-primary-fill,#4a6cf7)}.ysh-card-check{margin-top:2px;flex:0 0 auto;cursor:pointer}.ysh-card-main{flex:1;min-width:0;cursor:pointer;display:flex;flex-direction:column;gap:3px}.ysh-card-title-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.ysh-card-title{font-weight:600;font-size:13px;overflow-wrap:anywhere}.ysh-card-id{margin-top:1px}.ysh-card-meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--dsw-alias-label-secondary,#57606a);font-size:11px;margin-top:3px}.ysh-card-actions{display:flex;gap:4px;flex:0 0 auto;align-items:center;flex-wrap:wrap;justify-content:flex-end}.ysh-btn-link{border-color:transparent;background:transparent;color:var(--dsw-alias-button-primary-fill,#4a6cf7);padding:3px 7px}.ysh-btn-link:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,#0000000d)}.ysh-btn-danger{color:var(--dsw-alias-state-error-primary,#d64545)}.ysh-preview-id{background:var(--dsw-alias-bg-layer-2,#f6f8fa);border-radius:6px;padding:6px 8px;line-height:1.5}.ysh-preview-title{font-size:15px;font-weight:600;overflow-wrap:anywhere}.ysh-preview .ysh-field{flex-direction:row;gap:10px;align-items:baseline}.ysh-preview .ysh-field-label{flex:0 0 82px}.ysh-preview .ysh-field>span:last-child{overflow-wrap:anywhere}.ysh-preview-path{font-family:ui-monospace,monospace;font-size:11px;color:var(--dsw-alias-label-secondary,#57606a)}.ysh-preview-foot{display:flex;justify-content:flex-end;margin-top:4px}.ysh-status-tabs{display:flex;gap:4px;align-items:center;flex-wrap:wrap}.ysh-status-tab{border:1px solid var(--dsw-alias-border-l2,#d0d7de);background:transparent;color:var(--dsw-alias-label-secondary,#57606a);cursor:pointer;border-radius:7px;padding:4px 12px;font-size:12px}.ysh-status-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-status-tab-active{background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 12%,transparent);color:var(--dsw-alias-button-primary-fill,#4a6cf7);border-color:var(--dsw-alias-button-primary-fill,#4a6cf7);font-weight:600}.ysh-check-label{display:inline-flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap;font-size:12px}.ysh-selection-bar{display:flex;flex-direction:column;gap:8px;align-items:stretch;padding:9px 12px;border:1px solid var(--dsw-alias-border-l1,#e1e5ea);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);margin-bottom:2px}.ysh-selection-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.ysh-selection-row .ysh-input{padding-left:7px;padding-right:7px}.ysh-selected-count{font-size:12px;font-weight:600;color:var(--dsw-alias-button-primary-fill,#4a6cf7)}.ysh-batch-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto}.ysh-path-cell{overflow:hidden}.ysh-path-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;font-family:ui-monospace,monospace;font-size:11px;color:var(--dsw-alias-label-secondary,#57606a)}.ysh-hit-snips{margin:5px 0 2px}.ysh-hit-snips .ysh-hit-snippet{border-bottom:0;padding:1px 0}.ysh-results-scroll .ysh-card-row>td{border-bottom:0}@keyframes ysh-fade{from{opacity:0}to{opacity:1}}@keyframes ysh-slide{from{transform:translateX(24px);opacity:.6}to{transform:translateX(0);opacity:1}}@media(max-width:820px){.ysh-table th,.ysh-table td{padding:6px 8px}}";
+    var CSS = ".ysh-root{color:var(--dsw-alias-label-primary,#1f2328);display:flex;flex-direction:column;gap:12px;font-size:13px;line-height:1.5;max-width:100%}.ysh-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;position:sticky;top:0;z-index:9;background:var(--dsw-alias-bg-layer-1,#fff);padding:4px 0}.ysh-title{font-size:15px;font-weight:600}.ysh-count{color:var(--dsw-alias-label-secondary,#57606a);font-size:12px}.ysh-btn{border:1px solid var(--dsw-alias-border-l2,#d0d7de);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);cursor:pointer;border-radius:8px;padding:5px 12px;transition:background-color .14s,border-color .14s}.ysh-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,#0000000d)}.ysh-btn:disabled{opacity:.45;cursor:default}.ysh-btn-primary{background:var(--dsw-alias-button-primary-fill,#4a6cf7);color:var(--dsw-alias-label-primary-inverted,#fff);border-color:transparent}.ysh-btn-ghost{background:transparent}.ysh-btn-sm{padding:3px 9px;font-size:12px}.ysh-input{border:1px solid var(--dsw-alias-border-l2,#d0d7de);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);border-radius:8px;padding:5px 10px;font-size:13px}.ysh-input:focus-visible,.ysh-btn:focus-visible,.ysh-tab:focus-visible,.ysh-select:focus-visible{outline:2px solid color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 60%,transparent);outline-offset:1px}.ysh-search{flex:1;min-width:170px}.ysh-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea);position:sticky;top:38px;z-index:8;background:var(--dsw-alias-bg-layer-1,#fff);padding-top:2px}.ysh-tab{border:1px solid transparent;border-bottom:0;background:transparent;color:var(--dsw-alias-label-secondary,#57606a);cursor:pointer;border-radius:8px 8px 0 0;padding:7px 14px;font-size:13px;font-weight:500;transition:background-color .14s,color .14s}.ysh-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-tab-active{background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 10%,transparent);color:var(--dsw-alias-button-primary-fill,#4a6cf7);font-weight:600}.ysh-tab-icon{margin-right:5px;opacity:.85}.ysh-page{padding-top:2px}.ysh-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.ysh-card{border:1px solid var(--dsw-alias-border-l1,#e1e5ea);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:var(--dsw-shadow-lv1,0 1px 3px #00000014);border-radius:10px;padding:14px}.ysh-stat{display:flex;flex-direction:column;gap:4px}.ysh-stat-num{font-size:26px;font-weight:700;line-height:1.1}.ysh-stat-label{color:var(--dsw-alias-label-secondary,#57606a);font-size:12px}.ysh-shortcuts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.ysh-section{border:1px solid var(--dsw-alias-border-l1,#e1e5ea);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:var(--dsw-shadow-lv1,0 1px 3px #00000014);border-radius:10px;overflow:hidden}.ysh-section-head{padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea);font-weight:600;font-size:12px;color:var(--dsw-alias-label-secondary,#57606a);display:flex;align-items:center;justify-content:space-between;gap:6px}.ysh-scroll{max-height:540px;overflow-y:auto;overflow-x:hidden}.ysh-table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;table-layout:fixed}.ysh-table th,.ysh-table td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea);vertical-align:middle;overflow-wrap:anywhere}.ysh-sticky-head{position:sticky;top:0;z-index:5}.ysh-toolbar-row>td{background:var(--dsw-alias-bg-layer-1,#fff);padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea)}.ysh-head-row>th{background:var(--dsw-alias-bg-layer-2,#f6f8fa);color:var(--dsw-alias-label-secondary,#57606a);font-size:12px;font-weight:600;white-space:nowrap;border-bottom:1px solid var(--dsw-alias-border-l2,#d0d7de)}.ysh-row{cursor:pointer}.ysh-row:hover>td{background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-row-sel>td{background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 9%,transparent)}.ysh-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ysh-toolbar .ysh-select{width:auto;min-width:110px}.ysh-cell-title{font-weight:600;overflow-wrap:anywhere}.ysh-cell-meta{color:var(--dsw-alias-label-secondary,#57606a);font-size:11px;margin-top:2px}.ysh-chip{display:inline-flex;align-items:center;gap:3px;background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 12%,transparent);border-radius:10px;padding:1px 7px;font-size:11px;margin:1px 3px 1px 0}.ysh-status-chip{display:inline-flex;align-items:center;background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#1a7f37) 14%,transparent);color:var(--dsw-alias-state-success-primary,#1a7f37);border-radius:10px;padding:1px 7px;font-size:11px;margin:1px 3px 1px 0;font-weight:600}.ysh-sc-normal{background:color-mix(in srgb,#1a7f37 15%,transparent);color:#1a7f37}.ysh-sc-subagent{background:color-mix(in srgb,#0969da 14%,transparent);color:#0969da}.ysh-sc-running{background:color-mix(in srgb,#cf222e 14%,transparent);color:#cf222e}.ysh-sc-archived{background:color-mix(in srgb,#8250df 15%,transparent);color:#8250df}.ysh-sc-current{background:color-mix(in srgb,#bf8700 16%,transparent);color:#9a6700}.ysh-sc-idle{background:color-mix(in srgb,#57606a 12%,transparent);color:#57606a}.ysh-sc-empty{background:color-mix(in srgb,#8c959f 14%,transparent);color:#8c959f;border:1px dashed #8c959f}.ysh-trash-restore{color:#1a7f37;border-color:#1a7f37}.ysh-trash-cascade{color:#9a6700;border-color:#9a6700}.ysh-trash-purge{color:#d64545;border-color:#d64545}.ysh-id{font-family:ui-monospace,monospace;font-size:10px;color:var(--dsw-alias-label-tertiary,#8c959f);overflow-wrap:anywhere}.ysh-empty{color:var(--dsw-alias-label-tertiary,#8c959f);text-align:center;padding:28px 14px;font-size:12px}.ysh-note{color:var(--dsw-alias-label-secondary,#57606a);font-size:11px;line-height:1.5}.ysh-filter-chip{display:inline-flex;align-items:center;gap:5px;background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 12%,transparent);border-radius:10px;padding:2px 8px;font-size:12px}.ysh-backdrop{position:fixed;inset:0;background:#00000066;z-index:40;display:flex;justify-content:center;align-items:center;padding:24px;animation:ysh-fade .14s ease-out}.ysh-drawer{width:460px;max-width:92vw;max-height:82vh;background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 14px 44px #00000040;border:1px solid var(--dsw-alias-border-l1,#e1e5ea);border-radius:14px;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px;animation:ysh-slide .18s ease-out}.ysh-drawer-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.ysh-drawer-title{font-size:15px;font-weight:600}.ysh-close{border:0;background:transparent;cursor:pointer;font-size:20px;line-height:1;color:var(--dsw-alias-label-secondary,#57606a);padding:2px 8px;border-radius:6px}.ysh-close:hover{background:var(--dsw-alias-interactive-bg-hover,#0000000d)}.ysh-field{display:flex;flex-direction:column;gap:5px}.ysh-field-label{font-size:11px;font-weight:600;color:var(--dsw-alias-label-secondary,#57606a)}.ysh-tagrow{display:flex;flex-wrap:wrap;gap:5px}.ysh-tag{display:inline-flex;align-items:center;gap:4px;background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 12%,transparent);border-radius:10px;padding:2px 8px;font-size:12px}.ysh-tag-x{border:0;background:none;cursor:pointer;color:var(--dsw-alias-label-secondary,#57606a);font-size:13px;line-height:1}.ysh-tag-x:hover{color:var(--dsw-alias-state-error-primary,#d64545)}.ysh-addtag{display:flex;gap:6px}.ysh-addtag .ysh-input{min-width:0;flex:1;width:100%}.ysh-select{width:100%;border:1px solid var(--dsw-alias-border-l2,#d0d7de);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);border-radius:8px;padding:5px 8px;font-size:13px}.ysh-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;padding:12px}.ysh-folder-card{border:1px solid var(--dsw-alias-border-l1,#e1e5ea);border-radius:9px;padding:12px;display:flex;flex-direction:column;gap:8px;cursor:pointer;transition:border-color .14s,background-color .14s}.ysh-folder-card:hover{border-color:var(--dsw-alias-button-primary-fill,#4a6cf7);background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-folder-name{font-weight:600;overflow-wrap:anywhere}.ysh-folder-meta{color:var(--dsw-alias-label-secondary,#57606a);font-size:11px}.ysh-folder-actions{display:flex;gap:6px;flex-wrap:wrap}.ysh-tagcloud{display:flex;flex-wrap:wrap;gap:10px;padding:16px}.ysh-tagbig{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--dsw-alias-border-l1,#e1e5ea);border-radius:20px;padding:7px 14px;cursor:pointer;font-size:13px;transition:border-color .14s,background-color .14s}.ysh-tagbig:hover{border-color:var(--dsw-alias-button-primary-fill,#4a6cf7);background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-tagbig-num{color:var(--dsw-alias-label-secondary,#57606a);font-size:11px}.ysh-form{display:flex;gap:6px;padding:12px;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea)}.ysh-form .ysh-input{min-width:0;flex:1}.ysh-status{padding:8px 10px;border-radius:8px;font-size:12px}.ysh-status-err{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d64545) 8%,transparent);color:var(--dsw-alias-state-error-primary,#d64545)}.ysh-confirm{margin:10px 12px}.ysh-hint{padding:24px;text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center}.ysh-search-panel{border:1px solid var(--dsw-alias-border-l1,#e1e5ea);background:var(--dsw-alias-bg-layer-2,#f6f8fa);border-radius:10px;padding:0}.ysh-results-head{position:sticky;top:0;z-index:2;background:var(--dsw-alias-bg-layer-2,#f6f8fa);padding:9px 12px;border-bottom:1px solid var(--dsw-alias-border-l1,#e1e5ea)}.ysh-results-scroll{max-height:520px;overflow-y:auto;overflow-x:hidden;padding:2px 12px 8px}.ysh-index-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;font-size:11px;color:var(--dsw-alias-label-secondary,#57606a)}.ysh-index-track{flex:1;min-width:80px;height:5px;border-radius:3px;background:var(--dsw-alias-border-l1,#e1e5ea);overflow:hidden}.ysh-index-fill{height:100%;background:var(--dsw-alias-button-primary-fill,#4a6cf7);transition:width .2s}.ysh-hit{padding:8px 0;border-bottom:1px dashed var(--dsw-alias-border-l1,#e1e5ea)}.ysh-hit:last-child{border-bottom:0}.ysh-hit-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.ysh-hit-title{font-weight:600;cursor:pointer;overflow-wrap:anywhere}.ysh-hit-title:hover{color:var(--dsw-alias-button-primary-fill,#4a6cf7)}.ysh-hit-snippet{margin-top:4px;color:var(--dsw-alias-label-secondary,#57606a);font-size:12px;line-height:1.55;overflow-wrap:anywhere}.ysh-hit-meta{font-size:10px;color:var(--dsw-alias-label-tertiary,#8c959f)}.ysh-mark{background:#fff2a8;color:inherit;border-radius:2px;padding:0 1px;font-weight:600}.ysh-search-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:9px 12px;border:1px solid var(--dsw-alias-border-l1,#e1e5ea);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:var(--dsw-shadow-lv1,0 1px 3px #00000014);border-radius:10px;position:sticky;top:76px;z-index:7}.ysh-search-wrap{position:relative;flex:1;min-width:180px;display:flex;align-items:center}.ysh-search-wrap .ysh-search{width:100%;padding-right:32px;min-width:0}.ysh-search-clear-x{position:absolute;right:7px;top:50%;transform:translateY(-50%);border:0;background:transparent;cursor:pointer;color:var(--dsw-alias-label-secondary,#57606a);font-size:19px;line-height:1;padding:0 5px;border-radius:4px}.ysh-search-clear-x:hover{background:var(--dsw-alias-interactive-bg-hover,#0000000d);color:var(--dsw-alias-state-error-primary,#d64545)}.ysh-status-ok{background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#1a7f37) 10%,transparent);color:var(--dsw-alias-state-success-primary,#1a7f37)}.ysh-filter-row{display:flex;gap:8px;flex-wrap:nowrap;align-items:center;flex:0 0 100%;min-width:0}.ysh-filter-row .ysh-select{width:auto;min-width:110px}.ysh-card-row>td{border-bottom:0;padding:5px 8px!important}.ysh-card-row .ysh-card{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;border-radius:10px;cursor:default;transition:border-color .14s,background-color .14s}.ysh-card-row .ysh-card:hover{border-color:var(--dsw-alias-button-primary-fill,#4a6cf7)}.ysh-card-row .ysh-card-sel{background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 8%,transparent);border-color:var(--dsw-alias-button-primary-fill,#4a6cf7)}.ysh-card-check{margin-top:2px;flex:0 0 auto;cursor:pointer}.ysh-card-main{flex:1;min-width:0;cursor:pointer;display:flex;flex-direction:column;gap:3px}.ysh-card-title-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.ysh-card-title{font-weight:600;font-size:13px;overflow-wrap:anywhere}.ysh-card-id{margin-top:1px}.ysh-card-meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--dsw-alias-label-secondary,#57606a);font-size:11px;margin-top:3px}.ysh-card-actions{display:flex;gap:4px;flex:0 0 auto;align-items:center;flex-wrap:wrap;justify-content:flex-end}.ysh-btn-link{border-color:transparent;background:transparent;color:var(--dsw-alias-button-primary-fill,#4a6cf7);padding:3px 7px}.ysh-btn-link:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,#0000000d)}.ysh-btn-danger{color:var(--dsw-alias-state-error-primary,#d64545)}.ysh-preview-id{background:var(--dsw-alias-bg-layer-2,#f6f8fa);border-radius:6px;padding:6px 8px;line-height:1.5}.ysh-preview-title{font-size:15px;font-weight:600;overflow-wrap:anywhere}.ysh-preview .ysh-field{flex-direction:row;gap:10px;align-items:baseline}.ysh-preview .ysh-field-label{flex:0 0 82px}.ysh-preview .ysh-field>span:last-child{overflow-wrap:anywhere}.ysh-preview-path{font-family:ui-monospace,monospace;font-size:11px;color:var(--dsw-alias-label-secondary,#57606a)}.ysh-preview-foot{display:flex;justify-content:flex-end;margin-top:4px}.ysh-status-tabs{display:flex;gap:4px;align-items:center;flex-wrap:wrap}.ysh-status-tab{border:1px solid var(--dsw-alias-border-l2,#d0d7de);background:transparent;color:var(--dsw-alias-label-secondary,#57606a);cursor:pointer;border-radius:7px;padding:4px 12px;font-size:12px}.ysh-status-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#0000000a)}.ysh-status-tab-active{background:color-mix(in srgb,var(--dsw-alias-button-primary-fill,#4a6cf7) 12%,transparent);color:var(--dsw-alias-button-primary-fill,#4a6cf7);border-color:var(--dsw-alias-button-primary-fill,#4a6cf7);font-weight:600}.ysh-check-label{display:inline-flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap;font-size:12px}.ysh-selection-bar{display:flex;flex-direction:column;gap:8px;align-items:stretch;padding:9px 12px;border:1px solid var(--dsw-alias-border-l1,#e1e5ea);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);margin-bottom:2px}.ysh-selection-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.ysh-selection-row .ysh-input{padding-left:7px;padding-right:7px}.ysh-selected-count{font-size:12px;font-weight:600;color:var(--dsw-alias-button-primary-fill,#4a6cf7)}.ysh-batch-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto}.ysh-path-cell{overflow:hidden}.ysh-path-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;font-family:ui-monospace,monospace;font-size:11px;color:var(--dsw-alias-label-secondary,#57606a)}.ysh-hit-snips{margin:5px 0 2px}.ysh-hit-snips .ysh-hit-snippet{border-bottom:0;padding:1px 0}.ysh-results-scroll .ysh-card-row>td{border-bottom:0}@keyframes ysh-fade{from{opacity:0}to{opacity:1}}@keyframes ysh-slide{from{transform:translateX(24px);opacity:.6}to{transform:translateX(0);opacity:1}}@media(max-width:820px){.ysh-table th,.ysh-table td{padding:6px 8px}}.ysh-menu-delete{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;border:0;background:transparent;cursor:pointer;color:var(--dsw-alias-state-error-primary,#cf222e);padding:7px 12px;font-size:13px;line-height:20px;text-align:left;font-family:inherit;border-radius:4px}.ysh-menu-delete:hover,.ysh-menu-delete:focus-visible{background:var(--dsw-alias-interactive-bg-hover,#0000000d);outline:none}.ysh-menu-delete-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex:0 0 16px;color:var(--dsw-alias-state-error-primary,#cf222e)}";
     var CSS_TAG_ID = "@dsh-plugin-yanyan-session-hub/client/ui.css";
     function injectCss() {
       try {
@@ -80,6 +84,8 @@ window.__ModuleLoader__.load({
       zh: {
         "hub.nav": "会话管理中心",
         "hub.title": "会话管理中心",
+        "hub.menuDelete": "删除会话",
+        "hub.menuDeleteConfirm": "确定删除该会话？已归档会话将直接删除，未归档会话将移入回收站。",
         "hub.refresh": "刷新",
         "hub.refreshing": "刷新中…",
         "tab.overview": "总览",
@@ -90,8 +96,11 @@ window.__ModuleLoader__.load({
         "hub.overview": "全局总览",
         "hub.statSessions": "会话总数",
         "hub.statFolders": "文件夹数",
+        "hub.statWorkspaces": "工作区数",
         "hub.statTags": "标签数",
         "hub.statUnfiled": "未分类",
+        "hub.statArchived": "已归档",
+        "hub.statTrash": "回收站",
         "hub.shortcuts": "快捷入口",
         "hub.goFolders": "管理文件夹",
         "hub.goTags": "查看标签",
@@ -186,6 +195,7 @@ window.__ModuleLoader__.load({
         "hub.deleteArchived": "删除",
         "hub.deleteArchivedConfirm": "🚨 确认彻底删除这 {n} 个已归档会话？将直接永久删除，不进入回收站，不可恢复！",
         "hub.deleteToTrashConfirm": "确认删除 {n} 个未归档会话？删除后将移入回收站中。",
+        "hub.deleteMixedConfirm": "确认删除这 {n} 个会话？其中 {na} 个已归档将被永久删除（不可恢复），{nn} 个未归档将移入回收站。",
         "hub.deleteArchivedDone": "已删除 {n} 个会话（{failed} 个失败）",
         "hub.noArchived": "没有已归档的会话。",
         "hub.colArchivedAt": "归档时间",
@@ -236,6 +246,8 @@ window.__ModuleLoader__.load({
       en: {
         "hub.nav": "Session Hub",
         "hub.title": "Session Hub",
+        "hub.menuDelete": "Delete session",
+        "hub.menuDeleteConfirm": "Delete this session? Archived sessions are permanently deleted; active sessions are moved to the recycle bin.",
         "hub.refresh": "Refresh",
         "hub.refreshing": "Refreshing…",
         "tab.overview": "Overview",
@@ -246,8 +258,11 @@ window.__ModuleLoader__.load({
         "hub.overview": "Overview",
         "hub.statSessions": "Total sessions",
         "hub.statFolders": "Folders",
+        "hub.statWorkspaces": "Workspaces",
         "hub.statTags": "Tags",
         "hub.statUnfiled": "Unfiled",
+        "hub.statArchived": "Archived",
+        "hub.statTrash": "Recycle bin",
         "hub.shortcuts": "Shortcuts",
         "hub.goFolders": "Manage folders",
         "hub.goTags": "View tags",
@@ -342,6 +357,7 @@ window.__ModuleLoader__.load({
         "hub.deleteArchived": "Delete",
         "hub.deleteArchivedConfirm": "🚨 Permanently delete these {n} archived sessions? They will be deleted directly, NOT moved to recycle bin, and cannot be recovered!",
         "hub.deleteToTrashConfirm": "Delete {n} unarchived session(s)? They will be moved to the recycle bin.",
+        "hub.deleteMixedConfirm": "Delete these {n} sessions? {na} archived will be permanently deleted (cannot be recovered), {nn} unarchived will be moved to the recycle bin.",
         "hub.deleteArchivedDone": "Deleted {n} session(s) ({failed} failed)",
         "hub.noArchived": "No archived sessions.",
         "hub.colArchivedAt": "Archived at",
@@ -419,6 +435,10 @@ window.__ModuleLoader__.load({
     function post(path, payload) {
       return request(path, { method: "POST", body: JSON.stringify(payload || {}) }, DEFAULT_TIMEOUT_MS);
     }
+    // 批量操作专用 POST：一次请求处理整批 ids，用更宽超时，避免逐条并发触发 signal timed out。
+    function postBatch(path, payload) {
+      return request(path, { method: "POST", body: JSON.stringify(payload || {}) }, BATCH_TIMEOUT_MS);
+    }
     function createApi() {
       return {
         list: function () { return request(API_PREFIX + "/list", undefined, DEFAULT_TIMEOUT_MS); },
@@ -439,13 +459,15 @@ window.__ModuleLoader__.load({
         // 原生归档 / 取消归档（融合后的核心能力）
         archive: function (ids) { return post(API_PREFIX + "/archive", { ids: ids }); },
         unarchive: function (ids) { return post(API_PREFIX + "/unarchive", { ids: ids }); },
-        deleteArchived: function (ids) { return post(API_PREFIX + "/delete-archived", { ids: ids }); },
+        deleteArchived: function (ids) { return postBatch(API_PREFIX + "/delete-archived", { ids: ids }); },
+        // 统一删除（原生会话右键菜单「删除」）：后端按归档状态自行分流。
+        deleteAny: function (ids) { return postBatch(API_PREFIX + "/delete-any", { ids: ids }); },
         // 回收站融合（trash 子包能力并入本子包，统一 prefix）
         trashList: function () { return request(API_PREFIX + "/trash/list", undefined, DEFAULT_TIMEOUT_MS); },
         trashSnapshot: function () { return request(API_PREFIX + "/trash/snapshot", undefined, DEFAULT_TIMEOUT_MS); },
         trashRestore: function (id) { return post(API_PREFIX + "/trash/restore", { id: id }); },
-        trashMove: function (ids) { return post(API_PREFIX + "/trash/move", { ids: ids }); },
-        trashPurge: function (ids) { return post(API_PREFIX + "/trash/purge", { ids: ids }); },
+        trashMove: function (ids) { return postBatch(API_PREFIX + "/trash/move", { ids: ids }); },
+        trashPurge: function (ids) { return postBatch(API_PREFIX + "/trash/purge", { ids: ids }); },
         trashCascade: function (ids) { return post(API_PREFIX + "/trash/cascade", { ids: ids }); },
         trashPurgeExpired: function () { return post(API_PREFIX + "/trash/purge-expired", {}); },
         trashRecover: function () { return post(API_PREFIX + "/trash/recover", {}); },
@@ -649,6 +671,8 @@ window.__ModuleLoader__.load({
           archiving: false,
           archiveResult: { ok: res && res.ok !== false, kind: kind, n: done, failed: failed, message: res && res.message },
         });
+        // 归档/删除改变宿主会话集合，让宿主立即重新发现（见 _refreshHostSessions）。
+        self._refreshHostSessions();
         return self.load();
       }).catch(function (err) {
         self.store.set({ archiving: false, archiveResult: { ok: false, kind: kind, error: String((err && err.message) || err) } });
@@ -668,6 +692,49 @@ window.__ModuleLoader__.load({
       if (!ids || ids.length === 0) return Promise.resolve();
       return this._archiveMutate(this.api.deleteArchived(ids), "delete");
     };
+    /** 统一删除（原生会话右键菜单）：后端按归档态分流（归档直删 / 未归档进回收站），前端只传 id。 */
+    HubController.prototype.deleteAny = function (ids) {
+      if (!ids || ids.length === 0) return Promise.resolve();
+      return this._archiveMutate(this.api.deleteAny(ids), "delete");
+    };
+    /**
+     * 批量删除：按归档状态分两组，各发一次请求，合并结果。
+     * 真机 m02109：原实现把 N 条拆成 N 个单元素并发请求，37 条时后端争抢 workspace.json
+     * 导致单条超过前端 15s 超时（signal timed out），还会留下「已解档但没删掉」的未命名幽灵。
+     * 这里最多只发 2 个请求，且都用长超时（见 postBatch）。
+     */
+    HubController.prototype.batchDelete = function (archivedIds, otherIds) {
+      var self = this;
+      var a = Array.isArray(archivedIds) ? archivedIds.slice() : [];
+      var b = Array.isArray(otherIds) ? otherIds.slice() : [];
+      if (a.length === 0 && b.length === 0) return Promise.resolve();
+      this.store.set({ archiving: true, archiveResult: null });
+      var pDel = a.length ? this.api.deleteArchived(a) : Promise.resolve({ ok: true, done: [], failed: [] });
+      var pMove = b.length ? this.api.trashMove(b) : Promise.resolve({ ok: true, done: [], failed: [] });
+      return Promise.all([
+        pDel.catch(function (err) { return { ok: false, failed: a, error: String((err && err.message) || err) }; }),
+        pMove.catch(function (err) { return { ok: false, failed: b, error: String((err && err.message) || err) }; })
+      ]).then(function (rs) {
+        var done = [].concat(Array.isArray(rs[0].done) ? rs[0].done : [], Array.isArray(rs[1].done) ? rs[1].done : []);
+        var failed = [].concat(Array.isArray(rs[0].failed) ? rs[0].failed : [], Array.isArray(rs[1].failed) ? rs[1].failed : []);
+        var msgs = [];
+        [rs[0], rs[1]].forEach(function (r) {
+          if (r && r.error) msgs.push(String(r.error));
+          if (r && r.message) msgs.push(String(r.message));
+        });
+        self.store.set({
+          archiving: false,
+          archiveResult: {
+            ok: failed.length === 0, kind: "delete",
+            n: done.length, failed: failed.length,
+            message: msgs.length ? msgs.join("; ") : undefined,
+          },
+        });
+        // 批量删除改变宿主会话集合，让宿主立即重新发现（见 _refreshHostSessions）。
+        self._refreshHostSessions();
+        return self.load();
+      });
+    };
     /** 回收站：加载条目 + 恢复/移入/彻底删除/级联删除。 */
     HubController.prototype.loadTrash = function () {
       var self = this;
@@ -682,6 +749,19 @@ window.__ModuleLoader__.load({
         self.store.set({ trashBusy: false, trashItems: [], trashCount: 0, trashResult: { ok: false, error: String((err && err.message) || err) } });
       });
     };
+    /** 让宿主重新扫描磁盘发现被移入/移出回收站的会话（fire-and-forget，异常不影响本插件 UI）。
+     *  真机 bug m03612/m03616 修复：恢复/删除会改变宿主会话集合，必须让宿主自行重新发现
+     *  （照抄现成包 @linxin666 client.js:541-542 的 sessions.refresh()）。绝不在 host 伪造
+     *  api-session/added——宿主期望 summary 对象，字符串 id 会造出"未命名/NaN"幽灵行。 */
+    HubController.prototype._refreshHostSessions = function () {
+      try {
+        var sessions = this.sessions;
+        if (sessions && typeof sessions.refresh === "function") {
+          var p = sessions.refresh();
+          if (p && typeof p.catch === "function") p.catch(function () {});
+        }
+      } catch (e) {}
+    };
     HubController.prototype._trashMutate = function (promise) {
       var self = this;
       this.store.set({ trashBusy: true, trashResult: null });
@@ -691,6 +771,8 @@ window.__ModuleLoader__.load({
           : (res && Array.isArray(res.purged)) ? res.purged.length : 1;
         var failed = res && Array.isArray(res.failed) ? res.failed.length : 0;
         self.store.set({ trashBusy: false, trashResult: { ok: res && res.ok !== false, n: n, failed: failed } });
+        // 恢复/移入/清除改变宿主会话集合，必须让宿主立即重新发现（见 _refreshHostSessions）。
+        self._refreshHostSessions();
         return self.loadTrash();
       }).catch(function (err) {
         self.store.set({ trashBusy: false, trashResult: { ok: false, error: String((err && err.message) || err) } });
@@ -955,7 +1037,11 @@ window.__ModuleLoader__.load({
 
     // ---------- 总览页 ----------
     function StatCard(props) {
-      return h("div", { className: "ysh-card ysh-stat" },
+      return h("div", {
+        className: "ysh-card ysh-stat" + (props.onClick ? " ysh-stat-clickable" : ""),
+        onClick: props.onClick,
+        style: props.onClick ? { cursor: "pointer" } : null,
+      },
         h("span", { className: "ysh-stat-num" }, props.value),
         h("span", { className: "ysh-stat-label" }, props.label));
     }
@@ -963,33 +1049,27 @@ window.__ModuleLoader__.load({
       var ui = props.ui;
       var go = props.go;
       var counts = ui.overview && ui.overview.folderCounts ? ui.overview.folderCounts : {};
+      var statusTags = props.statusTags || [];
       var sessionCount = (ui.items || []).length;
-      var folderCount = (ui.folders || []).length;
-      var tagCount = (ui.tags || []).length;
-      var unfiledCount = counts[UNFILED] || 0;
-      var shortcuts = [
-        { label: "hub.goSessions", tab: "sessions" },
-        { label: "hub.goWorkspaces", tab: "workspaces" },
-        { label: "hub.goTags", tab: "tags" },
-        { label: "hub.goTrash", tab: "trash" },
-      ];
+      // 总览口径与工作区页/标签页对齐（m03432）：文件夹数→工作区数，标签数=状态标签+手动标签。
+      var workspaceCount = (ui.workspaces || []).length;
+      var tagCount = statusTags.length + (ui.tags || []).length;
+      // m03594：未分类→已归档条数，并新增回收站条数。
+      var archivedCount = (ui.items || []).filter(function (it) { return it.archived === true; }).length;
+      var trashCount = ui.trashCount != null ? ui.trashCount : 0;
+      // m03684：去掉底部快捷按钮，改为点击每条统计卡跳转对应页面。
+      // m03742：已归档卡用专用回调（切到会话 tab + 预设分段），其余卡直接跳 tab。
+      var jump = function (tab) { return function () { go(tab); }; };
+      var jumpArchived = props.onArchived || jump("sessions");
       return h("div", { className: "ysh-page" },
         h("div", { className: "ysh-section" },
           h("div", { className: "ysh-section-head" }, h("span", null, t("hub.overview"))),
           h("div", { className: "ysh-stats", style: { padding: "12px" } },
-            h(StatCard, { key: "s1", value: sessionCount, label: t("hub.statSessions") }),
-            h(StatCard, { key: "s2", value: folderCount, label: t("hub.statFolders") }),
-            h(StatCard, { key: "s3", value: tagCount, label: t("hub.statTags") }),
-            h(StatCard, { key: "s4", value: unfiledCount, label: t("hub.statUnfiled") }))),
-        h("div", { className: "ysh-shortcuts" },
-          shortcuts.map(function (s) {
-            return h("button", {
-              key: s.tab,
-              type: "button",
-              className: "ysh-btn",
-              onClick: function () { go(s.tab); },
-            }, t(s.label));
-          })));
+            h(StatCard, { key: "s1", value: sessionCount, label: t("hub.statSessions"), onClick: jump("sessions") }),
+            h(StatCard, { key: "s2", value: workspaceCount, label: t("hub.statWorkspaces"), onClick: jump("workspaces") }),
+            h(StatCard, { key: "s3", value: tagCount, label: t("hub.statTags"), onClick: jump("tags") }),
+            h(StatCard, { key: "s4", value: archivedCount, label: t("hub.statArchived"), onClick: jumpArchived }),
+            h(StatCard, { key: "s5", value: trashCount, label: t("hub.statTrash"), onClick: jump("trash") }))));
     }
 
     // ---------- 右侧抽屉（会话详情编辑） ----------
@@ -1059,9 +1139,9 @@ window.__ModuleLoader__.load({
       var archiveResult = props.archiveResult;
 
       var [batchTagText, setBatchTagText] = useState("");
-      // 图2 布局：分段状态（全部/未归档/已归档）+ 仅看异常会话，均为本组件独立 hook，
-      // 无条件放在顶部，hook 数恒定（严守 Phase1 白屏教训）。
-      var [statusFilter, setStatusFilter] = useState("all");
+      // 图2 布局：分段状态提升到父组件，便于总览「已归档」卡片跳转时预设（hook 数恒定）。
+      var statusFilter = props.statusFilter || "all";
+      var setStatusFilter = props.setStatusFilter || function () {};
       var [onlyIssues, setOnlyIssues] = useState(false);
 
       // 二次过滤：shown 已是后端/父组件的过滤结果，这里再按分段与异常条件收窄。
@@ -1135,7 +1215,8 @@ window.__ModuleLoader__.load({
             key: tab.id, type: "button", role: "tab",
             className: "ysh-status-tab" + (statusFilter === tab.id ? " ysh-status-tab-active" : ""),
             "aria-selected": statusFilter === tab.id,
-            onClick: function () { setStatusFilter(tab.id); },
+            // m03928：切换分段会改变视图成员，清空选中，避免陈旧 id 残留导致批量删除误分流。
+            onClick: function () { setStatusFilter(tab.id); setSelectedIds([]); },
           }, t(tab.label));
         }));
 
@@ -1164,7 +1245,7 @@ window.__ModuleLoader__.load({
             className: "ysh-select",
             value: activeFolder || "__all__",
             "aria-label": t("hub.filterWorkspace"),
-            onChange: function (e) { setActiveFolder(e.target.value); },
+            onChange: function (e) { setActiveFolder(e.target.value); setSelectedIds([]); },
           },
             h("option", { value: "__all__" }, t("hub.allWorkspaces")),
             h("option", { value: UNFILED }, t("hub.noWorkspace")),
@@ -1173,7 +1254,7 @@ window.__ModuleLoader__.load({
             className: "ysh-select",
             value: activeTag || "__all__",
             "aria-label": t("hub.filterTag"),
-            onChange: function (e) { setActiveTag(e.target.value === "__all__" ? null : e.target.value); },
+            onChange: function (e) { setActiveTag(e.target.value === "__all__" ? null : e.target.value); setSelectedIds([]); },
           },
             h("option", { value: "__all__" }, t("hub.allTags")),
             tagOptions),
@@ -1232,16 +1313,28 @@ window.__ModuleLoader__.load({
             disabled: busy || archiving || selectedIds.length === 0,
             onClick: function () {
               var canConfirm = typeof window !== "undefined" && typeof window.confirm === "function";
-              var allArchived = selectedIds.length > 0 && selectedIds.every(function (sid) {
-                var r = viewShown.filter(function (x) { return x.id === sid; })[0];
-                return r && r.archived;
-              });
-              if (canConfirm && !window.confirm(t(allArchived ? "hub.deleteArchivedConfirm" : "hub.deleteToTrashConfirm", { n: selectedIds.length }))) return;
+              // 按归档状态分两组，各发一次批量请求（最多 2 个），避免 N 个并发请求超时。
+              var archivedIds = [], otherIds = [];
               selectedIds.forEach(function (sid) {
                 var row = viewShown.filter(function (r) { return r.id === sid; })[0];
-                if (row && row.archived) controller.deleteArchived([sid]);
-                else controller.trashMove([sid]);
+                if (row && row.archived) archivedIds.push(sid);
+                else otherIds.push(sid);
               });
+              // 三态确认文案（m00490）：原二态把「已归档+未归档」混合选中一律说成
+              // 「删除 N 个未归档会话」，与用户实际选择不符。混合态单独提示两组数量与后果。
+              var confirmKey, confirmVars = { n: selectedIds.length };
+              if (archivedIds.length > 0 && otherIds.length === 0) confirmKey = "hub.deleteArchivedConfirm";
+              else if (archivedIds.length === 0) confirmKey = "hub.deleteToTrashConfirm";
+              else {
+                confirmKey = "hub.deleteMixedConfirm";
+                confirmVars.na = archivedIds.length;
+                confirmVars.nn = otherIds.length;
+              }
+              if (canConfirm && !window.confirm(t(confirmKey, confirmVars))) return;
+              // 删除成功后清空选中（m00490）：不清会导致已删/已入回收站的会话仍高亮，
+              // 残留 id 再次批量删除时全部落入 otherIds → trashMove 对不存在会话失败，
+              // 表现为「点确定没反应 / 反复弹同样的 N 条」。与其它批量操作（打标签）一致。
+              controller.batchDelete(archivedIds, otherIds).then(function () { setSelectedIds([]); });
             },
           }, t("hub.batch.delete"))),
         // 第二排：标签 + 导出（放不下时内部 flex-wrap 自动换第三排）
@@ -1303,7 +1396,8 @@ window.__ModuleLoader__.load({
                             onChange: function () { toggleOne(it.id); },
                           }),
                           // 中：标题 + 状态chip + 灰色 id + 工作区/活动/大小
-                          h("div", { className: "ysh-card-main", onClick: function () { onOpen(it.id); } },
+                          // 点击整行直接切换选中状态（不再弹预览）；预览入口保留在右侧「预览」按钮。
+                          h("div", { className: "ysh-card-main", onClick: function () { toggleOne(it.id); } },
                             h("div", { className: "ysh-card-title-row" },
                               h("span", { className: "ysh-card-title" }, it.title || t("hub.noTitle")),
                               (Array.isArray(it.status) && it.status.length > 0)
@@ -1355,7 +1449,8 @@ window.__ModuleLoader__.load({
         ? h("div", { className: archiveResult.ok ? "ysh-status ysh-status-ok" : "ysh-status ysh-status-err" },
             archiveResult.ok
               ? t(archiveResult.kind === "unarchive" ? "hub.unarchiveDone" : archiveResult.kind === "delete" ? "hub.deleteArchivedDone" : "hub.archiveDone", { n: archiveResult.n, failed: archiveResult.failed })
-              : String(archiveResult.error || t("hub.saveFailed", { m: "" })))
+              : (t(archiveResult.kind === "unarchive" ? "hub.unarchiveDone" : archiveResult.kind === "delete" ? "hub.deleteArchivedDone" : "hub.archiveDone", { n: archiveResult.n || 0, failed: archiveResult.failed || 0 })
+                + (archiveResult.error || archiveResult.message ? "（" + String(archiveResult.error || archiveResult.message) + "）" : "")))
         : null;
       return h("div", { className: "ysh-page" },
         searchToolbar,
@@ -1460,19 +1555,38 @@ window.__ModuleLoader__.load({
 
       var workspaces = props.workspaces || [];
       var allTags = props.allTags || [];
+      // 回收站统计必须基于回收站自身条目（ui.trashItems），不能沿用会话栏全量会话的
+      // statusTags（否则下拉计数与会话栏完全一致、与回收站实际条数对不上，m03049）。
+      var statusTags = buildStatusTags(items);
       var workspaceOptions = workspaces.map(function (w) {
         var val = w.title || w.path;
         return h("option", { key: w.id || w.path, value: val }, val);
       });
-      var tagOptions = allTags.map(function (x) {
-        return h("option", { key: x.tag, value: x.tag }, "#" + x.tag + " (" + x.count + ")");
+      // 与会话栏/标签栏一致：状态标签在前（前缀编码），自定义标签在后。
+      var statusTagOptions = statusTags.map(function (x) {
+        return h("option", { key: x.tag, value: x.tag }, t("hub.statusTagLabel", { s: x.label, n: x.count }));
       });
+      // 自定义标签同样按回收站自身条目的 tags 聚合（见上，m03049）。
+      var trashTagCounts = {};
+      items.forEach(function (it) {
+        (it.tags || []).forEach(function (tag) { trashTagCounts[tag] = (trashTagCounts[tag] || 0) + 1; });
+      });
+      var manualTagOptions = Object.keys(trashTagCounts).sort().map(function (tag) {
+        return h("option", { key: tag, value: tag }, "#" + tag + " (" + trashTagCounts[tag] + ")");
+      });
+      var tagOptions = statusTagOptions.concat(manualTagOptions);
 
       // 二次过滤：标题 / 内容 / ID + 工作区 + 标签（数据来自后端 trashList 补字段）。
+      // 状态标签走 it.status，自定义标签走 it.tags —— 与会话栏 filterAndSort 同构。
       var q = String(query || "").trim().toLowerCase();
       var viewShown = items.filter(function (it) {
         if (workspaceFilter !== "__all__" && it.workspace !== workspaceFilter) return false;
-        if (tagFilter !== "__all__" && (it.tags || []).indexOf(tagFilter) < 0) return false;
+        if (tagFilter !== "__all__") {
+          var statusLabel = decodeStatusTag(tagFilter);
+          if (statusLabel) {
+            if ((it.status || []).indexOf(statusLabel) < 0) return false;
+          } else if ((it.tags || []).indexOf(tagFilter) < 0) return false;
+        }
         if (q) {
           var hay = String(it.title || "") + " " + String(it.id || "") + " " + String(it.content || "");
           if (hay.toLowerCase().indexOf(q) < 0) return false;
@@ -1598,7 +1712,12 @@ window.__ModuleLoader__.load({
                         onChange: function () { toggleOne(it.id); },
                       })),
                       h("td", null,
-                        h("div", { className: "ysh-cell-title" }, it.title || t("hub.noTitle")),
+                        h("div", { className: "ysh-cell-title" },
+                          it.title || t("hub.noTitle"),
+                          (Array.isArray(it.status) && it.status.length > 0)
+                            ? it.status.map(function (s) { return h("span", { key: "st-" + s, className: "ysh-status-chip " + statusClass(s) }, s); })
+                            : null,
+                          (it.tags || []).map(function (tag) { return h("span", { key: tag, className: "ysh-chip" }, "#" + tag); })),
                         h("div", { className: "ysh-cell-meta ysh-id" }, it.id),
                         it.archiveSkipped ? h("div", { className: "ysh-cell-meta" }, t("hub.inactive")) : null),
                       h("td", null, formatTime(it.trashedAt) || t("hub.timeUnknown")),
@@ -1660,10 +1779,14 @@ window.__ModuleLoader__.load({
         // 否则会出现「输入框空着、却还显示上次匹配结果」的错位。
         controller.clearSearch();
         controller.load();
+        // m03594：总览页需要回收站条数，打开时顺带拉一次（进入回收站 tab 仍会再刷新）。
+        try { controller.loadTrash(); } catch (e) {}
         controller.startIndexPolling();
         return function () { controller.dispose(); };
       }, [controller]);
       var [activeTab, setActiveTab] = useState("overview");
+      // m03742：分段状态提升到顶层，供总览「已归档」卡片预设（SessionsPage 改 props 接收）。
+      var [statusFilter, setStatusFilter] = useState("all");
       var [query, setQuery] = useState("");
       var [sortKey, setSortKey] = useState("updatedDesc");
       var [activeFolder, setActiveFolder] = useState("__all__");
@@ -1721,8 +1844,10 @@ window.__ModuleLoader__.load({
       };
       var closeDrawer = function () { setActiveRowId(null); };
       // 切换 tab：进入回收站时顺带加载回收站清单（纯函数，不增 hook）。
-      var switchTab = function (tab) {
+      // m03742：手动切 tab 时重置分段为「全部」；总览「已归档」卡传入 keepStatusFilter=true 保留预设。
+      var switchTab = function (tab, keepStatusFilter) {
         setActiveTab(tab);
+        if (!keepStatusFilter) setStatusFilter("all");
         if (tab === "trash") { try { controller.loadTrash(); } catch (e) {} }
       };
 
@@ -1737,12 +1862,17 @@ window.__ModuleLoader__.load({
         h(ErrorBoundary, null,
           h(TabBar, { active: activeTab, setActive: switchTab }),
           activeTab === "overview"
-            ? h(OverviewPage, { ui: ui, go: switchTab })
+            ? h(OverviewPage, {
+              ui: ui, go: switchTab, statusTags: statusTags,
+              // m03742：已归档卡片跳到「会话」tab 并预设分段为已归档，与手动点击状态一致。
+              onArchived: function () { setStatusFilter("archived"); switchTab("sessions", true); },
+            })
             : (activeTab === "sessions" || activeTab === "archived")
               ? h(SessionsPage, {
                 shown: activeTab === "archived" ? archivedShown : shown,
                 mode: activeTab === "archived" ? "archived" : "sessions",
                 query: query, setQuery: setQuery,
+                statusFilter: statusFilter, setStatusFilter: setStatusFilter,
                 sortKey: sortKey, setSortKey: setSortKey,
                 selectedIds: selectedIds, setSelectedIds: setSelectedIds,
                 onOpen: setActiveRowId,
@@ -1767,6 +1897,7 @@ window.__ModuleLoader__.load({
                     ui: ui, controller: controller,
                     workspaces: ui.workspaces,
                     allTags: ui.tags,
+                    statusTags: statusTags,
                     refresh: function () { try { controller.loadTrash(); } catch (e) {} },
                   }),
           activeRow && activeTab === "sessions"
@@ -1774,8 +1905,58 @@ window.__ModuleLoader__.load({
             : null));
     }
 
+    // ---------- 原生会话右键菜单「删除」项（m04502）----------
+    // 通过宿主官方 slot `sidebar.workspaces.session.menu.item` 注入；组件以元素形式渲染，
+    // hooks（useMenuOpenState）在顶部无条件调用，符合 Phase1 白屏教训。
+    // 归档判断交给后端 deleteAny：归档→直接删除，未归档→进回收站，前端不感知归档态。
+    function SessionDeleteMenuItem(props) {
+      var sessionId = props.sessionId;
+      var controller = props.controller;
+      var useMenuOpenState = props.useMenuOpenState;
+      var menuState = useMenuOpenState ? useMenuOpenState() : [false, function () {}];
+      var setMenuOpen = menuState && menuState[1];
+      var svgAttrs = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round", strokeLinejoin: "round" };
+      var trashIcon = h("span", { className: "ysh-menu-delete-icon", "aria-hidden": "true" },
+        h("svg", svgAttrs,
+          h("path", { d: "M2.5 4.5h11" }),
+          h("path", { d: "M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5" }),
+          h("path", { d: "M4 4.5l.6 8a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9l.6-8" }),
+          h("path", { d: "M6.5 7v4" }),
+          h("path", { d: "M9.5 7v4" })
+        )
+      );
+      return h("button", {
+        type: "button",
+        role: "menuitem",
+        className: "ysh-menu-delete",
+        title: t("hub.menuDelete"),
+        onClick: function () {
+          try { if (setMenuOpen) setMenuOpen(false); } catch (e) {}
+          var ok = true;
+          try { ok = window.confirm(t("hub.menuDeleteConfirm")); } catch (e) { ok = true; }
+          if (!ok) return;
+          if (controller && sessionId) {
+            try { controller.deleteAny([sessionId]); } catch (e) {}
+          }
+        },
+      }, trashIcon, h("span", null, t("hub.menuDelete")));
+    }
+
+    // 原生菜单 keyed icon 渲染器（m04929）：纯 SVG，currentColor 继承原生菜单项文字色（danger 红），
+    // 尺寸 14 与原生图标一致，交由 primitives 的 Menu 统一排版，彻底解决图标/文字"歪了"。
+    function DeleteMenuItemIcon(props) {
+      var svgAttrs = { width: 14, height: 14, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" };
+      return h("svg", svgAttrs,
+        h("path", { d: "M2.5 4.5h11" }),
+        h("path", { d: "M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5" }),
+        h("path", { d: "M4 4.5l.6 8a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9l.6-8" }),
+        h("path", { d: "M6.5 7v4" }),
+        h("path", { d: "M9.5 7v4" })
+      );
+    }
+
     // ---------- apply ----------
-    var inject = ["slots", "locale", "connection", "sessions"];
+    var inject = ["slots", "locale", "connection", "sessions", "contextMenus"];
     function apply(ctx) {
       try {
         injectCss();
@@ -1786,7 +1967,9 @@ window.__ModuleLoader__.load({
         try { runtimeLocale = ctx.locale.bind(NS); } catch (e) { runtimeLocale = null; }
 
         var api = createApi();
-        var controller = new HubController({ api: api });
+        var controller = new HubController({ api: api, sessions: (function () {
+          try { return ctx.get("sessions"); } catch (e) { return undefined; }
+        })() });
         var face = function () { return { controller: controller }; };
         ctx.slots.inject("settings.section", function () {
           try {
@@ -1801,6 +1984,67 @@ window.__ModuleLoader__.load({
             return function () { unregister(); };
           } catch (e) { return function () {}; }
         });
+        // 原生会话右键菜单「删除」项（m04502/m04929）：
+        // 主路径用 contextMenus.register —— afterContent:true + order>600 排在「归档会话」下方，
+        // danger:true + keyed icon 让原生 primitives 统一渲染对齐/红字/图标，解决"歪了/位置不对"。
+        // 归档判断交给后端 deleteAny：归档→直接删除，未归档→进回收站，前端不感知归档态。
+        var menuRegistered = false;
+        try {
+          if (ctx.contextMenus && typeof ctx.contextMenus.register === "function") {
+            // keyed icon 渲染器：注册到 contextMenu.icon，供 action.icon.key 引用。
+            ctx.effect(function () {
+              try {
+                return ctx.slots.inject("contextMenu.icon", function () {
+                  return ctx.slots.register({ name: "contextMenu.icon", key: "dsh-yanyan-session-delete" }, DeleteMenuItemIcon);
+                });
+              } catch (e) { return function () {}; }
+            }, "dsh-plugin-yanyan-session-hub: menu icon");
+
+            var unregisterCtxMenu = ctx.contextMenus.register({
+              id: "dsh-yanyan-session-delete",
+              target: "session",
+              order: 700,
+              resolve: function (target) {
+                var sid = target && target.sessionId;
+                return [{
+                  id: "delete",
+                  label: t("hub.menuDelete"),
+                  icon: { key: "dsh-yanyan-session-delete" },
+                  danger: true,
+                  afterContent: true,
+                  run: function () {
+                    var ok = true;
+                    try { ok = window.confirm(t("hub.menuDeleteConfirm")); } catch (e) { ok = true; }
+                    if (!ok) return;
+                    if (sid && controller) {
+                      try { return controller.deleteAny([sid]); } catch (e) {}
+                    }
+                  },
+                }];
+              },
+            });
+            menuRegistered = true;
+            ctx.effect(function () { return function () { try { unregisterCtxMenu(); } catch (e) {} }; }, "dsh-plugin-yanyan-session-hub: menu action");
+          }
+        } catch (e) { menuRegistered = false; }
+
+        // 降级兜底：宿主无 contextMenus 时仍用旧 slot（渲染在归档之前），保证功能不丢。
+        if (!menuRegistered) {
+          ctx.slots.inject("sidebar.workspaces.session.menu.item", function () {
+            try {
+              var menuFace = function () { return { controller: controller }; };
+              var unregisterMenu = ctx.slots.register({
+                name: "sidebar.workspaces.session.menu.item",
+                id: "dsh-yanyan-session-delete",
+                order: 600,
+                label: function () { return t("hub.menuDelete"); },
+                locale: NS,
+                inject: menuFace,
+              }, SessionDeleteMenuItem);
+              return function () { unregisterMenu(); };
+            } catch (e) { return function () {}; }
+          });
+        }
       } catch (e) {}
     }
 

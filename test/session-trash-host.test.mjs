@@ -1,14 +1,13 @@
 // 路径 A · 第 4b 阶段（Host 服务层 + HTTP 路由 + Client 契约）测试。
 // 复用第 1 阶段的内存 fs 夹具思路，验证：TrashService 组装 deps 正确性、
 // cascadeDeps 透传链、路由准入/方法/body/错误码、reason 影响范围码原样透传、
-// client 源码的 settings.section / reason 映射 / 双入口标注 / 事件订阅契约。
+// 聚合包根 lib 的服务/路由契约；client 侧回归见本文件末尾的宿主刷新守护。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { zstdCompressSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import vm from 'node:vm';
 
 import { descendantsOf } from '../lib/session-cascade.js';
 
@@ -231,7 +230,7 @@ test('真机 bug m03612：TrashService.list 从会话日志补 entry.title，读
 test('回收站增强：TrashService.list 补 content/cwd（标题/内容/ID 搜索的数据源）', async () => {
   const trashedDir = '/dsh/session-trash/proj/session-rich';
   const jsonl = [
-    JSON.stringify({ type: 'session', version: 4, id: 'session-rich', cwd: 'F:\\DeepSeek Harness workspace\\default-workspace\\demo' }),
+    JSON.stringify({ type: 'session', version: 4, id: 'session-rich', cwd: 'F:\\DeepSeek Harness workspace\\default-workspace\\demo', origin: 'subagent' }),
     JSON.stringify({ type: 'session/title', seq: 1, data: { title: '旧标题' } }),
     JSON.stringify({ type: 'session/title', seq: 9, data: { title: '最新标题' } }),
     JSON.stringify({ type: 'user/message', seq: 10, data: { content: [{ type: 'text', text: '你好世界' }, { type: 'image', data: 'x' }] } }),
@@ -252,6 +251,7 @@ test('回收站增强：TrashService.list 补 content/cwd（标题/内容/ID 搜
   assert.match(e.content, /回复内容/, 'content 含 assistant/message 的 text part');
   assert.doesNotMatch(e.content, /image/, '忽略非 text part');
   assert.equal(e.cwd, 'F:\\DeepSeek Harness workspace\\default-workspace\\demo', '补 cwd 供工作区筛选派生');
+  assert.equal(e.origin, 'subagent', '补 origin 供回收站行显示子会话状态');
 });
 
 test('TrashService.baseDeps 透传 locate/isSessionActive，能力齐全', () => {
@@ -371,231 +371,33 @@ test('makeTrashRoutes：restore 路由把 id 传给 service.restore', async () =
   assert.equal(res.body.ok, true);
 });
 
-// ---- 子包 host 入口可加载 + 注入声明 ----
+// ---- 回归守护：回收站变更必须让宿主立即重新发现会话（m00024 / m03612 / m03616） ----
 
-test('新子包 host 入口可 import，name/inject/apply 契约正确', async () => {
-  const mod = await import('../packages/dsh-plugin-yanyan-trash/lib/index.js');
-  assert.equal(mod.name, 'dsh-plugin-yanyan-trash');
-  assert.equal(typeof mod.apply, 'function');
-  assert.ok(mod.inject.includes('webServer'));
-  assert.ok(mod.inject.includes('workspaceRegistry'));
-});
-
-// ---- Client 契约（源码断言，无 DOM 环境） ----
-
-test('client 源码：react 由 require 注入、settings.section 用独立 id/order', () => {
-  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-trash', 'lib', 'client.js'), 'utf8');
-  assert.ok(src.includes('__ModuleLoader__'));
-  assert.ok(src.includes('require("react")'));
-  assert.ok(src.includes('ctx.slots.register'));
-  assert.ok(src.includes('"settings.section"'));
-  assert.ok(src.includes('"dsh-yanyan-trash"'), '独立 section id 防重');
-  assert.ok(src.includes('api/dsh-yanyan-trash'), '消费 host 路由前缀');
-});
-
-test('client 源码：reason 映射含影响范围粒度（item/family/batch）与 read-error 家族提示', () => {
-  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-trash', 'lib', 'client.js'), 'utf8');
-  for (const code of ['corrupt-target', 'read-error', 'family-protected', 'child-ids-dangling', 'purge-in-progress']) {
-    assert.ok(src.includes('"' + code + '"'), `缺少 reason 映射 ${code}`);
-  }
-  assert.ok(src.includes('scope: "item"'));
-  assert.ok(src.includes('scope: "family"'));
-  assert.ok(src.includes('scope: "batch"'));
-  assert.ok(/连同其子代理一并保留|subagents were all kept/.test(src), 'read-error 家族整族保留提示');
-});
-
-test('client 源码：双入口过渡标注 + 原生事件订阅 + canonical id 直接消费', () => {
-  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-trash', 'lib', 'client.js'), 'utf8');
-  assert.ok(/不进入回收站|does NOT enter this trash/.test(src), '双入口过渡标注');
-  assert.ok(src.includes('api-session/removed'));
-  assert.ok(src.includes('api-session/added'));
-  // 真机 bug m03612/m03616：恢复/删除成功后必须让宿主自行刷新会话（照抄现成包 sessions.refresh）。
+test('session-hub client：恢复/归档/批量删除后触发宿主 sessions.refresh（m00024）', () => {
+  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-session-hub', 'lib', 'client.js'), 'utf8');
   assert.ok(src.includes('_refreshHostSessions'), '应有宿主刷新方法 _refreshHostSessions');
   assert.ok(/sessions[\s\S]{0,40}refresh|\.refresh\(\)/.test(src), '应调用 sessions.refresh() 让宿主重新发现会话');
-  // payload 已是 canonical 字符串：client 不再调用 canonicalSessionId/replace 归一
-  assert.ok(!/canonicalSessionId\(/.test(src), 'client 不应自行归一 id');
+  assert.ok(/ctx\.get\(\s*["']sessions["']\s*\)/.test(src), 'apply 应从 ctx 注入宿主 sessions 能力');
+  assert.ok((src.match(/_refreshHostSessions\(\)/g) || []).length >= 3, '恢复/归档/批量删除三条变更链都应触发宿主刷新');
 });
 
-test('client 源码：级联删除有确认预览（只沿 origin=subagent 计数，fork 剪掉）', () => {
-  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-trash', 'lib', 'client.js'), 'utf8');
-  assert.ok(src.includes('countCascadeDescendants'), '应有级联后代计数函数');
-  assert.ok(src.includes('child.origin !== "subagent"'), '预览应只沿 origin=subagent，剪掉 fork');
-  assert.ok(src.includes('"trash.confirmCascade"'), '应有确认文案（含 {n}）');
-  assert.ok(src.includes('"data-dsh-part": "confirm"'), '应有确认对话框 UI');
-  assert.ok(src.includes('setPending({ kind: "cascade"'), '级联按钮应弹确认而非直接删');
-  assert.ok(src.includes('setPending({ kind: "batchPurge"'), '批量彻底删除应弹确认');
+test('session-hub client：批量删除成功后清空选中（m00490）', () => {
+  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-session-hub', 'lib', 'client.js'), 'utf8');
+  // 不清选中会导致已删/已入回收站的会话仍高亮，残留 id 再次删除时全部落 otherIds →
+  // trashMove 对不存在会话失败，表现为「点确定没反应 / 反复弹同样的 N 条」。
+  assert.ok(/batchDelete\(archivedIds, otherIds\)\.then\(function \(\) \{ setSelectedIds\(\[\]\); \}\)/.test(src),
+    'batchDelete 成功后应清空 selectedIds');
 });
 
-test('client 源码：空状态含「其他入口删除的会话不在此处」提示', () => {
-  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-trash', 'lib', 'client.js'), 'utf8');
-  assert.ok(/其他入口删除的会话不会出现在此处|deleted through other entries do not appear here/.test(src), '双入口空状态提示');
-});
-
-// ---- P1-b：client 级联预览与 host descendantsOf 的等价性锁死 ----
-
-/** 在 Node 中通过 vm 执行 client IIFE，拿其 __testing 纯函数钩子。 */
-function loadClientTesting() {
-  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-trash', 'lib', 'client.js'), 'utf8');
-  let captured = null;
-  const fakeReact = {
-    createElement: () => ({}),
-    useState: () => [null, () => {}],
-    useEffect: () => {},
-    useSyncExternalStore: () => null,
-  };
-  const sandbox = {
-    window: {
-      __ModuleLoader__: {
-        load: (entry) => {
-          // 只取 factory，不执行 apply（apply 需要 slots/locale/connection 等 ctx）。
-          const module = entry.factory((name) => {
-            if (name === 'react') return fakeReact;
-            return {};
-          });
-          captured = module.__testing;
-        },
-      },
-    },
-    fetch: () => Promise.resolve({}),
-    // client 的 __testing 钩子由 typeof process !== 'undefined' 守卫，
-    // 浏览器不暴露；测试沙箱注入 process 以模拟 Node 环境拿到同一份 factory 导出的函数。
-    process: {},
-    Promise,
-    Set,
-    Object,
-    String,
-    Array,
-    Date,
-    console,
-  };
-  vm.runInNewContext(src, sandbox, { filename: 'dsh-plugin-yanyan-trash/client.js' });
-  return captured;
-}
-
-test('P1-b：client collectCascadeDescendants 与 host descendantsOf 等价（subagent/fork/嵌套/环）', () => {
-  const t = loadClientTesting();
-  assert.ok(t && typeof t.collectCascadeDescendants === 'function', 'client 应暴露 __testing.collectCascadeDescendants');
-  const row = (id, origin, childIds) => ({ id, origin, childIds });
-  // 覆盖：多层 subagent 链、fork 分支（应剪掉）、环、共享子代理、未知 origin。
-  const rows = [
-    row('root', undefined, ['a', 'f']),
-    row('a', 'subagent', ['b', 'shared']),
-    row('b', 'subagent', ['a']),          // 环：b -> a
-    row('f', 'fork', ['forkchild']),        // fork 整条分支剪掉
-    row('forkchild', 'subagent', []),
-    row('shared', 'subagent', []),
-    row('other', undefined, ['shared']),    // 另一个父共享 shared
-    row('weird', 'pinned', []),             // 未知 origin 剪掉
-  ];
-  for (const id of ['root', 'a', 'b', 'f', 'other']) {
-    const host = new Set(descendantsOf(rows, id));
-    const client = new Set(t.collectCascadeDescendants(rows, id));
-    assert.deepEqual([...client].sort(), [...host].sort(), `后代集合应等价：root=${id}`);
-  }
-});
-
-test('P1-b：批量预览 N 对共享子代理去重（与 cascade targets Set 一致）', () => {
-  const t = loadClientTesting();
-  const row = (id, origin, childIds) => ({ id, origin, childIds });
-  const rows = [
-    row('p1', undefined, ['shared', 'c1']),
-    row('p2', undefined, ['shared', 'c2']),
-    row('shared', 'subagent', []),
-    row('c1', 'subagent', []),
-    row('c2', 'subagent', []),
-  ];
-  // 逐个求和会得 4（shared 被计两次），并集去重应为 3。
-  const union = {};
-  ['p1', 'p2'].forEach((id) => t.collectCascadeDescendants(rows, id).forEach((c) => { union[c] = true; }));
-  assert.equal(Object.keys(union).length, 3, '共享子代理应去重');
-});
-
-test('P1-c：reasonText 对未映射 reason 回退通用文案（非空白/undefined）', () => {
-  const t = loadClientTesting();
-  const out = t.reasonText({ reason: 'pinned-protection-future' });
-  assert.ok(out.text && out.text.length > 0, '未知 reason 应有回退文案');
-  assert.ok(/pinned-protection-future/.test(out.text), '回退文案应保留原始 reason 代码便于诊断');
-  assert.equal(out.scope, 'item');
-});
-
-test('archive-gate / archive-active 有映射文案，不向用户暴露原始代码（m05087）', () => {
-  const t = loadClientTesting();
-  for (const code of ['archive-gate', 'archive-active']) {
-    assert.ok(t.REASON_MAP[code], `${code} 应在 REASON_MAP 中`);
-    const out = t.reasonText({ reason: code });
-    assert.ok(out.text && out.text.length > 0, `${code} 应有提示文案`);
-    assert.ok(!/archive-/.test(out.text), `${code} 文案不应暴露原始 reason 代码`);
-    assert.equal(out.scope, 'item');
-    // 文案应命中映射的中/英之一，而非 reasonUnknown 回退（回退会含原始代码，已被上一条断言排除）
-    const mapped = t.REASON_MAP[code];
-    assert.ok(out.text === mapped.zh || out.text === mapped.en, `${code} 应显示映射文案`);
-  }
-});
-
-// ---- UI 重构：标题回退 / 搜索过滤 / 时间格式化 / CSS 注入契约 ----
-
-test('UI 重构：displayTitle 多级回退，绝不显示裸 id/undefined/NaN', () => {
-  const t = loadClientTesting();
-  assert.equal(typeof t.displayTitle, 'function', '应暴露 __testing.displayTitle');
-  assert.equal(t.displayTitle({ title: '  Numeric Input  ' }), 'Numeric Input', 'title 优先且 trim');
-  assert.equal(t.displayTitle({ title: '', displayTitle: '备用标题' }), '备用标题', 'title 空则回退 displayTitle');
-  assert.equal(t.displayTitle({ label: '标签' }), '标签', '回退 label');
-  assert.equal(t.displayTitle({ sessionTitle: '会话标题' }), '会话标题', '回退 sessionTitle');
-  assert.equal(t.displayTitle({ title: undefined }), null, '无标题返回 null 交由调用方回退短 id');
-  assert.equal(t.displayTitle(null), null);
-  assert.equal(t.displayTitle({ title: '   ' }), null, '纯空白视为无标题');
-});
-
-test('UI 重构：shortId 去前缀取前 8 位，formatActivityTime 多字段回退', () => {
-  const t = loadClientTesting();
-  assert.equal(t.shortId('session-abcdef123456'), 'abcdef12', '去 session- 前缀取前 8 位');
-  assert.equal(t.shortId('mnemon-run-v1-xyz'), 'mnemon-r', '非 session 前缀直接取前 8 位');
-  assert.equal(t.shortId(''), '');
-  const t1 = t.formatActivityTime({ lastActivityAt: 1700000000000 });
-  assert.ok(t1 && t1.length > 0, 'lastActivityAt 应格式化');
-  assert.ok(t.formatActivityTime({ updatedAt: 1700000000000 }), '回退 updatedAt');
-  assert.ok(t.formatActivityTime({ createdAt: 1700000000000 }), '回退 createdAt');
-  assert.equal(t.formatActivityTime({ lastActivityAt: NaN }), null, 'NaN 不应显示');
-  assert.equal(t.formatActivityTime({}), null, '无时间返回 null');
-});
-
-test('UI 重构：filterLiveRows 按标题或 id 实时过滤（大小写不敏感）', () => {
-  const t = loadClientTesting();
-  const rows = [
-    { id: 'session-aaa11111', title: 'Numeric Input' },
-    { id: 'session-bbb22222', label: '研研工具' },
-    { id: 'session-ccc33333' },
-  ];
-  assert.equal(t.filterLiveRows(rows, '').length, 3, '空查询返回全部');
-  assert.deepEqual(t.filterLiveRows(rows, 'numeric').map((r) => r.id), ['session-aaa11111'], '按标题过滤');
-  assert.deepEqual(t.filterLiveRows(rows, '研研').map((r) => r.id), ['session-bbb22222'], '按 label 过滤');
-  assert.deepEqual(t.filterLiveRows(rows, 'BBB').map((r) => r.id), ['session-bbb22222'], '按 id 大小写不敏感');
-  assert.equal(t.filterLiveRows(rows, '不存在').length, 0);
-});
-
-test('UI 重构：CSS 用 --dsw-alias token 注入、tagId 防重；列表/搜索/多选结构齐备', () => {
-  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-trash', 'lib', 'client.js'), 'utf8');
-  assert.ok(src.includes('--dsw-alias-'), 'CSS 应走 DSH 原生视觉 token');
-  assert.ok(src.includes('data-plugin-css'), 'CSS 注入应带防重标记');
-  assert.ok(src.includes('injectCss()'), 'apply 应调用 injectCss');
-  assert.ok(src.includes('type: "search"'), '应有搜索框');
-  assert.ok(/data-dsh-part": "active-section"/.test(src), '应有上半区活跃会话区块');
-  assert.ok(/data-dsh-part": "trash-section"/.test(src), '应有下半区回收站区块');
-  assert.ok(/data-dsh-part": "live-row"/.test(src), '活跃会话应用列表行而非 select');
-  assert.ok(src.includes('trashMany'), '应支持批量移入回收站');
-  assert.ok(src.includes('displayTitle(row)'), '列表行应显示标题回退');
-  assert.ok(src.includes('formatActivityTime(row)'), '列表行应显示最后活跃时间');
-  // 核心逻辑不被破坏：仍消费 host 路由、事件订阅、宿主刷新。
-  assert.ok(src.includes('api/dsh-yanyan-trash'));
-  assert.ok(src.includes('_refreshHostSessions'));
-  assert.ok(!/canonicalSessionId\(/.test(src), 'client 不应自行归一 id');
-});
-
-// ---- 静态守护：Host 模块不复制逻辑、子包不改现成包 ----
-
-test('子包 host 不自己 import node:fs 的 rmSync，复用聚合包 makeServiceFs', () => {
-  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-trash', 'lib', 'index.js'), 'utf8');
-  assert.ok(src.includes('session-trash-service.js'));
-  assert.ok(src.includes('session-trash-routes.js'));
-  assert.ok(!/import\s*\{[^}]*\brmSync\b/.test(src), '子包 host 不应自行引入 rmSync');
+test('session-hub client：批量删除三态确认文案，混合选中单独提示（m00490）', () => {
+  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-session-hub', 'lib', 'client.js'), 'utf8');
+  assert.ok(src.includes('"hub.deleteMixedConfirm"'), '应有混合选中专用文案 key deleteMixedConfirm');
+  // zh 与 en 各一条定义
+  assert.ok((src.match(/"hub\.deleteMixedConfirm":/g) || []).length >= 2, 'zh/en 都应定义 deleteMixedConfirm');
+  // 三态分流：全归档 / 全未归档 / 混合（na=已归档数, nn=未归档数）
+  assert.ok(/confirmKey = "hub\.deleteArchivedConfirm"/.test(src), '全归档走 deleteArchivedConfirm');
+  assert.ok(/confirmKey = "hub\.deleteToTrashConfirm"/.test(src), '全未归档走 deleteToTrashConfirm');
+  assert.ok(/confirmKey = "hub\.deleteMixedConfirm"/.test(src), '混合选中走 deleteMixedConfirm');
+  assert.ok(/confirmVars\.na = archivedIds\.length/.test(src) && /confirmVars\.nn = otherIds\.length/.test(src),
+    '混合文案应带出两组会话数量');
 });

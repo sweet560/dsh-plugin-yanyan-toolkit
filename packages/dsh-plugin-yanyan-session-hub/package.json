@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-yanyan-session-hub",
-  "version": "1.0.1",
+  "version": "1.0.18",
   "description": "会话管理中心（Phase 1）：旁路元数据存储（标签/文件夹/自定义标题），左中右三栏 UI 骨架，不改动 DSH 原生会话文件。",
   "type": "module",
   "main": "lib/index.js",
@@ -26,7 +26,7 @@
   "dsh": {
     "engines": { "dsh": ">=0.2.2-rc.3" },
     "bundle": { "patch": "./cordis.patch.yml" },
-    "client": { "inject": ["slots", "locale", "connection", "sessions"], "platform": "web" },
+    "client": { "inject": ["slots", "locale", "connection", "sessions", "contextMenus"], "platform": "web" },
     "manifestVersion": 1
   }
 }

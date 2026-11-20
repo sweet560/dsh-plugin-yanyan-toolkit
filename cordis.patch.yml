@@ -1,7 +1,7 @@
-# 研研工具包：一个 bundle 挂载七条 loader 行 —— 自身元数据行 + 六个功能插件行。
+# 研研工具包：一个 bundle 挂载六条 loader 行 —— 自身元数据行 + 五个功能插件行。
 # 每行 name 必须互不相同且恰好等于对应包的 package.json name，否则
 # dsh-client-modules 会报 duplicate factory registration。
-# 六个功能插件各有独立 id，安装后可由用户在插件页单独启停。
+# 五个功能插件各有独立 id，安装后可由用户在插件页单独启停。
 - insert:
     # 自身行：只承载健康检查路由与空 client 壳，不贡献任何 UI。
     - id: yanyan-toolkit-compat
@@ -42,18 +42,10 @@
         padding: 3
         borderWidth: 1
 
-    # 插件五「会话回收站」：路径 A 第 1~4b 阶段的成果。自建回收站（可恢复）、
-    # 彻底删除、会话树级联删除、批量操作。【已融合进插件六「会话管理中心」】——
-    # 回收站的完整能力（原子写/串行锁/归档闸门/级联 fail-closed）已并入 session-hub，
-    # UI 作为其「回收站」tab 呈现，故本行禁用，避免重复注册 /api/dsh-yanyan-trash
-    # 路由与重复的 settings.section 入口。保留此行仅为结构兼容与既有测试契约。
-    # Host 半的四个纯函数模块 lib/session-{trash,purge,cascade,snapshot}.js 仍被融合方复用。
-    - id: dsh-plugin-yanyan-trash
-      name: 'dsh-plugin-yanyan-trash'
-      disabled: true
-
-    # 插件六「会话管理中心」：Phase 1 交付旁路元数据（session-metadata.json），
+    # 插件五「会话管理中心」：Phase 1 交付旁路元数据（session-metadata.json），
     # 三栏布局（左导航/中列表/右详情）+ 新建文件夹/移入文件夹/标签增删，全部
     # 只写独立账本，绝不改动 DSH 原生会话文件。settings.section order=27。
+    # 原独立回收站子包（dsh-plugin-yanyan-trash）能力已完整融入本插件的「回收站」tab，
+    # 故子包已删除；Host 半四个纯函数模块 lib/session-{trash,purge,cascade,snapshot}.js 仍由此复用。
     - id: dsh-plugin-yanyan-session-hub
       name: 'dsh-plugin-yanyan-session-hub'

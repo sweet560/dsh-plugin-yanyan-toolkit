@@ -78,7 +78,6 @@
     "dsh-plugin-yanyan-update": "file:./packages/dsh-plugin-yanyan-update",
     "dsh-plugin-yanyan-subagent": "file:./packages/dsh-plugin-yanyan-subagent",
     "dsh-plugin-yanyan-icon": "file:./packages/dsh-plugin-yanyan-icon",
-    "dsh-plugin-yanyan-trash": "file:./packages/dsh-plugin-yanyan-trash",
     "dsh-plugin-yanyan-session-hub": "file:./packages/dsh-plugin-yanyan-session-hub",
     "@linxin666/dsh-session-archive": "^0.4.18"
   },

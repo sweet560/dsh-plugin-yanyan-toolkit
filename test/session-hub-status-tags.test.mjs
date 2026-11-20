@@ -98,3 +98,31 @@ test('filterAndSort：状态标签筛选匹配 it.status，手动标签筛选匹
   const byStatusNone = T.filterAndSort(items, '', '__all__', T.encodeStatusTag('子会话'), 'updatedDesc');
   assert.equal(byStatusNone.length, 0, '无匹配状态应返回空');
 });
+
+test('buildStatusTags：回收站按自身条目聚合，计数不串到会话栏（m03049）', () => {
+  // 回归：TrashPage 曾用会话栏全量 statusTags（buildStatusTags(ui.items)），
+  // 导致回收站下拉计数与会话栏完全一致。修复后 TrashPage 内部改用
+  // buildStatusTags(items=trashItems)，两组数据应得到不同计数。
+  const sessionItems = [
+    { id: 's1', status: ['已归档'] },
+    { id: 's2', status: ['进行中'] },
+    { id: 's3', status: ['空闲'] },
+  ];
+  const trashItems = [
+    { id: 't1', status: ['已归档'] },
+    { id: 't2', status: ['已归档'] },
+    { id: 't3', status: ['空会话'] },
+  ];
+  const count = (tags, label) => {
+    const found = tags.filter((x) => x.label === label)[0];
+    return found ? found.count : -1;
+  };
+  const sessionTags = T.buildStatusTags(sessionItems);
+  const trashTags = T.buildStatusTags(trashItems);
+  assert.equal(count(sessionTags, '已归档'), 1);
+  assert.equal(count(trashTags, '已归档'), 2, '回收站已归档计数应来自回收站自身条目');
+  assert.equal(count(sessionTags, '空会话'), 0);
+  assert.equal(count(trashTags, '空会话'), 1);
+  assert.notEqual(count(sessionTags, '已归档'), count(trashTags, '已归档'),
+    '两组数据源的计数必须不同，证明下拉不再共用会话栏统计');
+});
