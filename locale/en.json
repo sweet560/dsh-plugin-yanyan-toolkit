@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Yanyan Toolkit",
-    "description": "One bundle with four independently toggleable plugins: Plugin Update (checks local and registry plugin versions, updates them one by one), Session Management (auto-archive / auto-delete, single and batch delete, reusing the existing dsh-session-archive package), Subagent Management (session header tab, permanent per-row delete with log root-cause removal + in-memory projection fix, clean all idle, and idle-time auto-cleanup), and Icon Generator (center-crops an uploaded image and generates an icon.svg fitted for the plugin list artwork slot). Install this one package to get all four."
+    "description": "One bundle with five independently toggleable plugins: Plugin Update (checks local and registry plugin versions, updates them one by one), Session Management (auto-archive / auto-delete, single and batch delete, reusing the existing dsh-session-archive package), Session Hub (three-pane layout: session / workspace / tags / recycle bin, batch archive & delete, move-in & restore, side-car ledger that never touches native sessions), Subagent Management (session header tab, permanent per-row delete with log root-cause removal + in-memory projection fix, clean all idle, and idle-time auto-cleanup), and Icon Generator (center-crops an uploaded image and generates an icon.svg fitted for the plugin list artwork slot). Install this one package to get all five."
   }
 }

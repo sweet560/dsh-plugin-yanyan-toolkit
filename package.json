@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-yanyan-toolkit",
-  "version": "1.4.12",
-  "description": "研研工具包：聚合「插件更新」「会话管理」「子智能体管理（日志根除 + 内存投影根治）」「图标生成」四个可独立开关的插件。",
+  "version": "1.4.13",
+  "description": "研研工具包：聚合「插件更新」「会话管理」「会话管理中心（三栏 + 回收站）」「子智能体管理（日志根除 + 内存投影根治）」「图标生成」五个可独立开关的插件。",
   "type": "module",
   "main": "lib/index.js",
   "icon": "icon.svg",

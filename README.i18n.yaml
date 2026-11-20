@@ -2,6 +2,6 @@
 # last confirmed-consistent state. README.md (default, Chinese) and
 # README.en.md (English) form the active pair; README.zh.md mirrors README.md.
 # Re-record with: node scripts/verify-docs.mjs --write <dir>
-README.md: e046d9ed15a5c6a3ade4c84b2f07b6f2d49e8eff
-README.en.md: b975a95112fa62509001c2509b9fc57b98e428f0
-README.zh.md: e046d9ed15a5c6a3ade4c84b2f07b6f2d49e8eff
+README.md: 731813fb456dd464aab15ac7415678557de982e2
+README.en.md: ff05e3778646fd19cbd6b893e632195ee678644e
+README.zh.md: 731813fb456dd464aab15ac7415678557de982e2
