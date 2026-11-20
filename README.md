@@ -2,7 +2,7 @@
 
 [English](README.en.md) | 中文
 
-> **当前版本：v1.4.13** ｜适配 DSH **0.2.2-rc.2**
+> **当前版本：v1.4.13** ｜适配 DSH **0.2.2-rc.5**（最低 0.2.2-rc.2）
 
 > 仓库：[GitHub](https://github.com/sweet560/dsh-plugin-yanyan-toolkit)
 

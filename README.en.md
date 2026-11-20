@@ -2,7 +2,7 @@
 
 English | [中文](README.md)
 
-> **Current version: v1.4.13** | Requires DSH **0.2.2-rc.2**
+> **Current version: v1.4.13** | Requires DSH **0.2.2-rc.5** (min 0.2.2-rc.2)
 
 > Repository: [GitHub](https://github.com/sweet560/dsh-plugin-yanyan-toolkit)
 
