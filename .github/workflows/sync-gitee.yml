@@ -1,9 +1,11 @@
 name: Sync to Gitee
 
-# GitHub 仓库 main 有更新后，自动把 main 与全部标签镜像到 Gitee。
+# GitHub 仓库 main 有更新后，自动把 main 与全部标签镜像到 Gitee；
+# push v* 标签时，额外把 GitHub 上对应的 Release（标题/正文）补建到 Gitee。
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch: # 也支持在 Actions 页面手动点一次，方便测试
 
 permissions:
@@ -94,3 +96,69 @@ jobs:
 
           echo "=== 同步完成后 Gitee 上的引用 ==="
           git ls-remote gitee
+
+  # push v* 标签（或手动触发）时，把 GitHub 上对应 Release 的标题/正文补建到 Gitee。
+  # Gitee 与 GitHub 的 Release API 不通用，须走 Gitee REST API；token 存于 Secret。
+  # needs: mirror 确保标签已先推到 Gitee，创建 Release 时标签已存在。
+  release:
+    name: 同步 GitHub Release 到 Gitee
+    needs: mirror
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 补建 Release 到 Gitee
+        env:
+          GITEE_API_TOKEN: ${{ secrets.GITEE_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GITEE_REPO: wtt520wyl/dsh-plugin-yanyan-toolkit
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GITEE_API_TOKEN:-}" ]; then
+            echo "::error::GitHub Secret GITEE_API_TOKEN 未配置，无法同步 Release 到 Gitee"
+            exit 1
+          fi
+
+          # 待同步 tag：push tag 只同步刚推的那个；手动触发则同步 GitHub 全部 Release
+          case "$EVENT_REF" in
+            refs/tags/v*) TAGS="${EVENT_REF#refs/tags/}" ;;
+            *) TAGS="$(gh api "repos/$GH_REPO/releases" --jq '.[].tag_name' | tr '\n' ' ')" ;;
+          esac
+          echo "待同步 tags: $TAGS"
+
+          for TAG in $TAGS; do
+            # 读 GitHub 上该 tag 的 Release；只有 git tag 没有 Release 时 gh 返回 404，跳过
+            META="$(gh api "repos/$GH_REPO/releases/tags/$TAG" \
+              --jq '{name:.name,body:.body,prerelease:.prerelease}' 2>/dev/null || true)"
+            if [ -z "$META" ]; then
+              echo "::warning::GitHub 上 $TAG 没有 Release（可能只有 git tag），跳过"
+              continue
+            fi
+            NAME="$(printf '%s' "$META" | jq -r '.name')"
+            BODY="$(printf '%s' "$META" | jq -r '.body')"
+            PRE="$(printf '%s' "$META" | jq -r '.prerelease')"
+
+            # 幂等：Gitee 上已有该 tag 的 Release 就跳过，不重复创建
+            COUNT="$(curl -sS "https://gitee.com/api/v5/repos/$GITEE_REPO/releases?access_token=$GITEE_API_TOKEN&per_page=100" \
+              | jq --arg t "$TAG" '[.[] | select(.tag_name==$t)] | length')"
+            if [ "$COUNT" -gt 0 ]; then
+              echo "Gitee 已存在 $TAG 的 Release，跳过"
+              continue
+            fi
+
+            curl -sS -X POST "https://gitee.com/api/v5/repos/$GITEE_REPO/releases" \
+              --data-urlencode "access_token=$GITEE_API_TOKEN" \
+              --data-urlencode "tag_name=$TAG" \
+              --data-urlencode "name=$NAME" \
+              --data-urlencode "body=$BODY" \
+              --data-urlencode "target_commitish=main" \
+              --data-urlencode "prerelease=$PRE" \
+              > /tmp/gitee-release.json
+            if jq -e '.id' /tmp/gitee-release.json > /dev/null; then
+              echo "已在 Gitee 创建 Release: $TAG (id=$(jq -r .id /tmp/gitee-release.json))"
+            else
+              echo "::error::创建 $TAG Release 失败: $(cat /tmp/gitee-release.json)"
+              exit 1
+            fi
+          done
