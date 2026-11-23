@@ -1,12 +1,22 @@
 # 研研工具包
 
+[![npm version](https://img.shields.io/npm/v/dsh-plugin-yanyan-toolkit.svg)](https://www.npmjs.com/package/dsh-plugin-yanyan-toolkit) [![npm downloads](https://img.shields.io/npm/dm/dsh-plugin-yanyan-toolkit.svg)](https://www.npmjs.com/package/dsh-plugin-yanyan-toolkit) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![node](https://img.shields.io/badge/node-%5E22.19.0%20%7C%7C%20%3E%3D24.0.0-brightgreen.svg)](https://nodejs.org/) [![publish](https://github.com/sweet560/dsh-plugin-yanyan-toolkit/actions/workflows/publish.yml/badge.svg)](https://github.com/sweet560/dsh-plugin-yanyan-toolkit/actions/workflows/publish.yml) [![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
+
 [English](README.en.md) | 中文
 
 > **当前版本：v1.5.0** ｜适配 DSH **0.2.2-rc.5**
 
 > 仓库：[GitHub](https://github.com/sweet560/dsh-plugin-yanyan-toolkit)
 
-一个聚合插件包，安装后同时获得五个可独立开关的插件。五个插件均为自研：找对插件此前是独立插件、本次 1.5.0 才并入工具包，另外四个也尽量借鉴官方与社区已验证的注入点，遵循「有现成的就借鉴、不重复造轮子」。会话管理能力已全部由自研「会话管理中心」承担，不再依赖任何第三方归档包。
+研研工具包是一个「一次安装、五件套」的聚合插件包：装一次同时获得五个可独立开关的插件，覆盖插件更新、会话整理、子智能体清理、图标生成、插件挑选五个高频场景，装一个包就等于配齐一套 DSH 日常工具。
+
+- **插件更新**：在插件页一键检查并逐行更新，npm 源与本地 git/file 源都覆盖；
+- **会话管理中心**：三栏管理会话、工作区与标签，自带回收站和批量操作，误删可恢复；
+- **子智能体管理**：会话标签里逐个或一键清理子智能体，彻底根除残留；
+- **图标生成**：上传图片自动裁切、预览、下载插件图标，不用再开设计工具；
+- **找对插件**：给 agent 注册工具，从整个 DSH 插件生态里挑出「最该装的那一个」。
+
+五个插件均为作者自研，可各自启停，稳定可靠。
 
 ## 包含插件
 
@@ -16,7 +26,7 @@
 | 会话管理中心 | `dsh-plugin-yanyan-session-hub` | 独立设置页分区，三栏布局（左导航 / 中列表 / 右详情）；工作区（文件夹）与标签管理、自定义标题、状态标签；会话搜索筛选、批量归档 / 取消归档 / 批量删除；内置「回收站」tab 支持移入 / 恢复 / 彻底删除（含级联），变更后主动触发宿主 `sessions.refresh()` 即时同步侧栏。所有元数据只写旁路账本，绝不改动 DSH 原生会话文件。原独立回收站子包能力已并入此插件。 |
 | 子智能体管理 | `dsh-plugin-yanyan-subagent` | 会话顶部新增可改名的「智能体管理」标签，浮层列出当前会话所有子智能体、支持行尾逐个**彻底删除**（日志根除 + 内存投影根治）与底部「清理全部空闲」；提供按空闲时间自动清理（默认关闭、可设分钟数）。 |
 | 图标生成 | `dsh-plugin-yanyan-icon` | 根据上传的图片居中裁切、套上圆角背景，生成适配插件列表图标位（列表行 30px / 详情卡片 36px）的 `icon.svg`；提供双尺寸预览与一键下载。 |
-| 找对插件 | `dsh-find-right-plugin` | 纯 host 工具插件，给 agent 注册 `find_dsh_plugins` 工具：聚合整个 DSH 插件生态（社区精选目录 + GitHub 实时 + npm 实时），按「相关度 × 可信度 × 新鲜度 × 热度」排序，主推最优 1 个 + 少量备选，只读、不代为安装。作者自研，此前为独立插件，本次 1.5.0 并入工具包。 |
+| 找对插件 | `dsh-find-right-plugin` | 纯 host 工具插件，给 agent 注册 `find_dsh_plugins` 工具：聚合整个 DSH 插件生态（社区精选目录 + GitHub 实时 + npm 实时），按「相关度 × 可信度 × 新鲜度 × 热度」排序，主推最优 1 个 + 少量备选，只读、不代为安装。自写。 |
 
 五个插件各有独立 loader 行，可在插件页分别启停。
 
@@ -80,7 +90,7 @@ dsh-plugin-yanyan-toolkit/          聚合根包（自身行为空壳，只承�
     dsh-plugin-yanyan-session-hub/ 会话管理中心（自写，含回收站）
     dsh-plugin-yanyan-subagent/    子智能体管理（自写）
     dsh-plugin-yanyan-icon/        图标生成（自写）
-    dsh-find-right-plugin/         找对插件（自研，原独立插件，本次并入；纯 host 工具）
+    dsh-find-right-plugin/         找对插件（自写；纯 host 工具）
 ```
 
-四个自写子包与找对插件子包（自研，原独立插件，本次并入）共五个都列在根包 `dependencies` 里，pnpm 的 hoisted 布局会把它们提升到 profile 根 `node_modules`，六条 loader 行（自身行 + 五个功能插件行）的 `name` 均可解析。
+五个自写子包都列在根包 `dependencies` 里，pnpm 的 hoisted 布局会把它们提升到 profile 根 `node_modules`，六条 loader 行（自身行 + 五个功能插件行）的 `name` 均可解析。

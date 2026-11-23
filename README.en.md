@@ -1,12 +1,22 @@
 # Yanyan Toolkit
 
+[![npm version](https://img.shields.io/npm/v/dsh-plugin-yanyan-toolkit.svg)](https://www.npmjs.com/package/dsh-plugin-yanyan-toolkit) [![npm downloads](https://img.shields.io/npm/dm/dsh-plugin-yanyan-toolkit.svg)](https://www.npmjs.com/package/dsh-plugin-yanyan-toolkit) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![node](https://img.shields.io/badge/node-%5E22.19.0%20%7C%7C%20%3E%3D24.0.0-brightgreen.svg)](https://nodejs.org/) [![publish](https://github.com/sweet560/dsh-plugin-yanyan-toolkit/actions/workflows/publish.yml/badge.svg)](https://github.com/sweet560/dsh-plugin-yanyan-toolkit/actions/workflows/publish.yml) [![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
+
 English | [中文](README.md)
 
 > **Current version: v1.5.0** | Requires DSH **0.2.2-rc.5**
 
 > Repository: [GitHub](https://github.com/sweet560/dsh-plugin-yanyan-toolkit)
 
-An umbrella plugin bundle that installs five independently toggleable plugins at once. All five are self-developed: the plugin finder was a standalone plugin and was merged into the toolkit in this 1.5.0 release, while the other four also reuse verified official/community injection points wherever possible, following the "reuse what already exists, do not reinvent the wheel" rule. Session management is now fully handled by the in-house Session Hub; no third-party archive package is required.
+Yanyan Toolkit is an "install once, get five" umbrella bundle: one install gives you five independently toggleable plugins covering five everyday needs - plugin updates, session organization, subagent cleanup, icon generation, and plugin discovery. One package equips you with a complete set of DSH daily tools.
+
+- **Plugin Update**: check and update plugins row by row on the Plugins page, covering both npm and local git/file sources;
+- **Session Hub**: manage sessions, workspaces and tags in a three-pane layout, with a built-in recycle bin and batch operations so accidental deletions can be restored;
+- **Subagent Management**: clean up subagents one by one or all at once from the session tab, thoroughly removing leftovers;
+- **Icon Generator**: upload an image to auto-crop, preview and download a plugin icon, no design tool needed;
+- **Find the Right Plugin**: registers a tool for the agent to pick "the one plugin you should install" from the entire DSH plugin ecosystem.
+
+All five are self-developed, can be toggled independently, and are stable and reliable.
 
 ## Included plugins
 
@@ -16,7 +26,7 @@ An umbrella plugin bundle that installs five independently toggleable plugins at
 | Session Hub | `dsh-plugin-yanyan-session-hub` | A dedicated settings section with a three-pane layout (left nav / center list / right detail); workspace (folder) and tag management, custom titles, status tags; session search/filter, batch archive / unarchive / delete; a built-in **Recycle Bin** tab with move-in / restore / permanent delete (incl. cascade), proactively calling the host `sessions.refresh()` after changes so the sidebar syncs immediately. All metadata is written only to a side-car ledger, never to native DSH session files. The former standalone trash subpackage's capabilities were merged here. |
 | Subagent Management | `dsh-plugin-yanyan-subagent` | Adds a renameable "Agent management" tab to the session header; its popover lists all subagents of the current session and supports **permanent per-row delete** (log root-cause removal + in-memory projection fix) and a bottom "Clean all idle" action, plus idle-time auto-cleanup (off by default, configurable in minutes). |
 | Icon Generator | `dsh-plugin-yanyan-icon` | Center-crops an uploaded image inside a rounded frame and generates an `icon.svg` fitted for the plugin list artwork slot (30px list row / 36px detail card), with dual-size preview and one-click download. |
-| Find the Right Plugin | `dsh-find-right-plugin` | A pure-host tool plugin that registers the `find_dsh_plugins` tool for the agent: it aggregates the whole DSH plugin ecosystem (community curated catalog + live GitHub + live npm), ranks by "relevance x trust x freshness x popularity", recommends the single best match plus a few alternatives, read-only and never installs on its own. Self-developed; it was a standalone plugin and was merged into the toolkit in this 1.5.0 release. |
+| Find the Right Plugin | `dsh-find-right-plugin` | A pure-host tool plugin that registers the `find_dsh_plugins` tool for the agent: it aggregates the whole DSH plugin ecosystem (community curated catalog + live GitHub + live npm), ranks by "relevance x trust x freshness x popularity", recommends the single best match plus a few alternatives, read-only and never installs on its own. Self-developed. |
 
 Each of the five plugins has its own loader row and can be toggled independently on the Plugins page.
 
@@ -80,7 +90,7 @@ dsh-plugin-yanyan-toolkit/          umbrella root (no-op halves, only patch and 
     dsh-plugin-yanyan-session-hub/ Session Hub (custom, incl. recycle bin)
     dsh-plugin-yanyan-subagent/    Subagent Management (custom)
     dsh-plugin-yanyan-icon/        Icon Generator (custom)
-    dsh-find-right-plugin/         Find the Right Plugin (self-developed, former standalone plugin, merged in this release; pure-host tool)
+    dsh-find-right-plugin/         Find the Right Plugin (self-developed; pure-host tool)
 ```
 
-The four custom subpackages and the plugin-finder subpackage (self-developed, former standalone plugin, merged in this release) — five in total — are listed in the root package's `dependencies`; pnpm's hoisted layout lifts them into the profile root `node_modules`, so all six loader row `name`s (self + five functional plugins) resolve.
+All five self-developed subpackages are listed in the root package's `dependencies`; pnpm's hoisted layout lifts them into the profile root `node_modules`, so all six loader row `name`s (self + five functional plugins) resolve.
