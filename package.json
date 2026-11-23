@@ -33,7 +33,6 @@
     "locale/zh.json",
     "README.md",
     "README.en.md",
-    "README.i18n.yaml",
     "CHANGELOG.md",
     "LICENSE",
     "scripts/cleanup-ghost-subagents.mjs",

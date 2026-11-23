@@ -1,6 +1,0 @@
-# Bilingual-pair consistency record: the git blob hash of each side as of the
-# last confirmed-consistent state. README.md (default, Chinese) and
-# README.en.md (English) form the active pair.
-# Re-record with: node scripts/verify-docs.mjs --write <dir>
-README.md: 7bc3c30a08a5cee1aaf94a63c32ee6e96fd38a48
-README.en.md: 796f131bab10283e209b29cb6c4bd788c01d4328
