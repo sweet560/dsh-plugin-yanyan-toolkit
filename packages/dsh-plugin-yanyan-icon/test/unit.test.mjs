@@ -231,4 +231,16 @@ test('client 半区源码具备稳定装载 / 裁切 / 预览 / 下载 / 清理�
   // 30px 行 / 36px 卡片双预览尺寸必须真实存在。
   assert.ok(src.includes('makePreview(T.rowLabel, 30)'));
   assert.ok(src.includes('makePreview(T.cardLabel, 36)'));
+  // 点击预览放大查看（lightbox）契约。
+  for (const needle of [
+    'data-yyic-zoom',
+    'yyic-lightbox',
+    'data-yyic-lightbox-close',
+    'function openLightbox',
+    'function closeLightbox',
+    "'data-yyic-zoom') !== null && t.src",
+  ]) {
+    assert.ok(src.includes(needle), `lib/client.js 缺少放大查看契约：${needle}`);
+  }
+  assert.ok(src.includes('closeLightbox();'), '清理 / reset / ESC 应关闭 lightbox');
 });

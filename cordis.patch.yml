@@ -15,17 +15,7 @@
         includeLocal: true
         includeRegistry: true
 
-    # 插件二「会话管理」：直接复用现成 npm 包 @linxin666/dsh-session-archive@0.4.18，
-    # 其自动归档 / 自动删除 / 单条与批量删除已覆盖全部需求，零重复造轮子。
-    # name 必须恰好等于真实包名，才能同时挂载它的 host 与 browser 半区。
-    # id 沿用该包自身 patch 的 session-archive：即使它被单独安装，
-    # 同 id 行也只会合并成一条；下面的 name 级防重守卫再兜一层底，
-    # 避免同 name 不同 id 的两条行重复挂载（loader 会报 duplicate prefix route）。
-    - id: session-archive
-      name: '@linxin666/dsh-session-archive'
-      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === '@linxin666/dsh-session-archive' && e.options.id !== 'session-archive' && !e.disabled)"
-
-    # 插件三「子智能体管理」：会话顶部标签 + 行尾删除 + 清理全部空闲 + 自动清理。
+    # 插件二「子智能体管理」：会话顶部标签 + 行尾删除 + 清理全部空闲 + 自动清理。
     - id: dsh-plugin-yanyan-subagent
       name: 'dsh-plugin-yanyan-subagent'
       config:
@@ -34,7 +24,7 @@
         idleMinutes: 30
         checkIntervalMin: 10
 
-    # 插件四「图标生成」：上传图片居中裁切、生成适配插件列表图标位的 icon.svg。
+    # 插件三「图标生成」：上传图片居中裁切、生成适配插件列表图标位的 icon.svg。
     - id: dsh-plugin-yanyan-icon
       name: 'dsh-plugin-yanyan-icon'
       config:
@@ -42,10 +32,18 @@
         padding: 3
         borderWidth: 1
 
-    # 插件五「会话管理中心」：Phase 1 交付旁路元数据（session-metadata.json），
+    # 插件四「会话管理中心」：Phase 1 交付旁路元数据（session-metadata.json），
     # 三栏布局（左导航/中列表/右详情）+ 新建文件夹/移入文件夹/标签增删，全部
     # 只写独立账本，绝不改动 DSH 原生会话文件。settings.section order=27。
     # 原独立回收站子包（dsh-plugin-yanyan-trash）能力已完整融入本插件的「回收站」tab，
     # 故子包已删除；Host 半四个纯函数模块 lib/session-{trash,purge,cascade,snapshot}.js 仍由此复用。
+    # 第三方 @linxin666/dsh-session-archive 已于 1.4.13 彻底剔除；会话管理全部由
+    # 本插件自持（含归档/删除/回收站），不再依赖任何外部归档包。
     - id: dsh-plugin-yanyan-session-hub
       name: 'dsh-plugin-yanyan-session-hub'
+
+    # 插件五「找对插件」：纯 host 工具插件，给 agent 注册 find_dsh_plugins 工具，
+    # 聚合整个 DSH 插件生态按 相关度×可信度×新鲜度×热度 排序，主推 1 个 + 少量备选。
+    # 无 client 半区、无 config，name 必须严格等于子包 package.json 的 name。
+    - id: dsh-find-right-plugin
+      name: 'dsh-find-right-plugin'

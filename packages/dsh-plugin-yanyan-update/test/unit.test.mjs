@@ -11,6 +11,7 @@ import {
   classifySpec,
   parseUpdateResult,
   updateRegistry,
+  updateAll,
   readEnablement,
   restoreEnablement,
 } from '../lib/index.js';
@@ -83,11 +84,11 @@ test('classifySpec：local / github / registry / skip 分类', () => {
   assert.equal(classifySpec('foo', '1.0.0').kind, 'registry');
   assert.equal(classifySpec('foo', 'bar').kind, 'registry');
 
-  // 官方包 / 自身 / 会话归档 → skip
+  // 官方包 / 自身 → skip；第三方包已于 1.4.13 剔除，回归普通 registry 分类
   assert.equal(classifySpec('@deepseek-ai/dsh', '0.4.16').kind, 'skip');
   assert.equal(classifySpec('dsh-plugin-yanyan-foo', '^1.0.0').kind, 'skip');
   assert.equal(classifySpec('dsh-plugin-yanyan-update', '^1.0.0').kind, 'skip');
-  assert.equal(classifySpec('@linxin666/dsh-session-archive', '1.2.3').kind, 'skip');
+  assert.equal(classifySpec('@linxin666/dsh-session-archive', '1.2.3').kind, 'registry');
 });
 
 test('根包元数据：patch 行一致、locale 合法 JSON、package.json 导出完整', () => {
@@ -455,4 +456,112 @@ test('updateRegistry：降级两阶段成功也恢复启用态', async () => {
   const result = await updateRegistry({}, 'foo', CFG, DEPS, mockIo(manager));
   assert.equal(result.ok, true);
   assert.ok(mgr.calls.some((c) => c[0] === 'setPluginEnabled' && c[1] === 'loader/foo' && c[2] === true));
+});
+
+// ───────────── 一键更新全部（updateAll） ─────────────
+
+function okManager(names) {
+  const calls = [];
+  const manager = {
+    updateBundle: async (id) => {
+      calls.push(id);
+      return {
+        from: '1.0.0', to: '2.0.0', step: 'install',
+        result: { application: 'applied', changed: true },
+      };
+    },
+  };
+  return { manager, calls };
+}
+
+test('updateAll：传入空 ids 返回零计数，不做任何更新', async () => {
+  const { manager, calls } = okManager();
+  const prof = { profileDir: '/p', deps: { foo: '1.0.0' } };
+  const result = await updateAll({}, [], CFG, prof, mockIo(manager));
+  assert.equal(result.ok, true);
+  assert.equal(result.total, 0);
+  assert.equal(result.succeeded, 0);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(result.results, []);
+  assert.equal(calls.length, 0);
+});
+
+test('updateAll：多个可更新插件一次性全部更新成功', async () => {
+  const { manager, calls } = okManager();
+  const prof = { profileDir: '/p', deps: { foo: '1.0.0', bar: '^1.0.0' } };
+  const result = await updateAll({}, ['foo', 'bar'], CFG, prof, mockIo(manager));
+  assert.equal(result.ok, true);
+  assert.equal(result.total, 2);
+  assert.equal(result.succeeded, 2);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(calls.sort(), ['bar', 'foo']);
+  assert.ok(result.results.every((r) => r.ok === true && r.updated === true));
+});
+
+test('updateAll：单条失败不影响其它插件继续更新', async () => {
+  const calls = [];
+  const manager = {
+    updateBundle: async (id) => {
+      calls.push(id);
+      if (id === 'bad') throw new Error('boom'); // bad 更新抛异常
+      return {
+        from: '1.0.0', to: '2.0.0', step: 'install',
+        result: { application: 'applied', changed: true },
+      };
+    },
+  };
+  const prof = { profileDir: '/p', deps: { foo: '1.0.0', bad: '1.0.0', bar: '^1.0.0' } };
+  const result = await updateAll({}, ['foo', 'bad', 'bar'], CFG, prof, mockIo(manager));
+  assert.equal(result.ok, true);
+  assert.equal(result.total, 3);
+  assert.equal(result.succeeded, 2);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(calls.sort(), ['bad', 'bar', 'foo']); // 三条都被尝试，bad 失败不阻断后续
+  const bad = result.results.find((r) => r.id === 'bad');
+  assert.equal(bad.ok, false);
+  assert.match(bad.message, /boom/);
+});
+
+test('updateAll：非白名单 id 与自身插件被拒绝，不调用更新通道', async () => {
+  const { manager, calls } = okManager();
+  const prof = {
+    profileDir: '/p',
+    deps: {
+      'dsh-plugin-yanyan-update': '1.2.2', // protected
+      foo: '1.0.0',
+      // 'evil' 不在 deps 名单 → invalid-id
+    },
+  };
+  const result = await updateAll({},
+    ['dsh-plugin-yanyan-update', 'evil', 'foo'], CFG, prof, mockIo(manager));
+  assert.equal(result.total, 3);
+  assert.equal(result.succeeded, 1);
+  assert.equal(result.failed, 2);
+  assert.deepEqual(calls, ['foo']); // 只有合法项真正更新
+  const protectedRow = result.results.find((r) => r.id === 'dsh-plugin-yanyan-update');
+  const invalidRow = result.results.find((r) => r.id === 'evil');
+  assert.equal(protectedRow.error, 'forbidden-self-update');
+  assert.equal(invalidRow.error, 'invalid-id');
+});
+
+test('updateAll：本地 link: 插件走 git 更新路径', async () => {
+  const gitCalls = [];
+  const io = mockIo({}, {
+    resolveProfileDir: () => '/p',
+    readDependencies: () => ({ local: 'link:../local' }),
+    gitRunner: (cwd, args) => {
+      gitCalls.push(args[0]);
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'aaa1111';
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'main';
+      if (args[0] === 'rev-parse' && args[2] === 'origin/main') return 'bbb2222';
+      return '';
+    },
+    gitRootResolver: () => '/p/local',
+  });
+  const prof = { profileDir: '/p', deps: { local: 'link:../local' } };
+  const result = await updateAll({}, ['local'], CFG, prof, io);
+  assert.equal(result.total, 1);
+  assert.equal(result.succeeded, 1);
+  assert.equal(result.results[0].restartRequired, true);
+  assert.ok(gitCalls.includes('merge'), '应执行 git merge --ff-only');
 });

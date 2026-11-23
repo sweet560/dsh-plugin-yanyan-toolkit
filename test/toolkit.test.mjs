@@ -1,6 +1,6 @@
 // 研研工具包聚合根包的结构校验。
 // 不依赖 DSH 运行时，也不依赖任何第三方 YAML 库：cordis.patch.yml 是本包自写的
-// 简单五行 insert，用逐行正则取出 id / name 即可。
+// 简单六行 insert，用逐行正则取出 id / name 即可。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -82,7 +82,7 @@ test('六条 loader 行的 name 与包清单一致，五个真实插件都在 de
   // 自身行：name 严格等于根包名。
   assert.ok(byName.has(pkg.name), '缺少 name 等于根包名的自身行');
 
-  // 其余五行：name 必须是 dependencies 的键（五个真实插件，含会话管理中心）。
+  // 其余五行：name 必须是 dependencies 的键（五个真实插件，含会话管理中心与找对插件）。
   const deps = pkg.dependencies;
   assert.equal(Object.keys(deps).length, 5, '应聚合 5 个真实插件');
   const functionRows = rows.filter((r) => r.name !== pkg.name);
@@ -91,16 +91,16 @@ test('六条 loader 行的 name 与包清单一致，五个真实插件都在 de
     assert.ok(Object.prototype.hasOwnProperty.call(deps, row.name), `行 name ${row.name} 未出现在 dependencies`);
   }
 
-  // 四个自写子包：行 name 必须恰好等于各自 package.json 的 name。
-  for (const sub of ['dsh-plugin-yanyan-update', 'dsh-plugin-yanyan-subagent', 'dsh-plugin-yanyan-icon', 'dsh-plugin-yanyan-session-hub']) {
+  // 六个自写子包：行 name 必须恰好等于各自 package.json 的 name。
+  for (const sub of ['dsh-plugin-yanyan-update', 'dsh-plugin-yanyan-subagent', 'dsh-plugin-yanyan-icon', 'dsh-plugin-yanyan-session-hub', 'dsh-find-right-plugin']) {
     const subPkg = readJson(`packages/${sub}/package.json`);
     assert.equal(subPkg.name, sub, `子包 ${sub} 的 package.json name 不匹配`);
     assert.ok(byName.has(sub), `缺少子包 ${sub} 的 loader 行`);
   }
 
-  // 会话管理行 name 必须恰好等于被复用的真实 npm 包名，才能挂上 browser 半区。
-  assert.ok(byName.has('@linxin666/dsh-session-archive'));
-  assert.equal(deps['@linxin666/dsh-session-archive'], '^0.4.18');
+  // 第三方 dsh-session-archive 已于 1.4.13 彻底剔除：loader 行、dependencies 均不得再有。
+  assert.ok(!byName.has('@linxin666/dsh-session-archive'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(deps, '@linxin666/dsh-session-archive'));
 
   // P1-a（4b 收口评审）：patch 文件本身被本测试直接读取，自写子包行的 name
   // 必须与子包 package.json 完全一致——否则 cordis 按 entry name 加载时找不到包，
@@ -108,15 +108,16 @@ test('六条 loader 行的 name 与包清单一致，五个真实插件都在 de
   assert.equal(rows.length, Object.keys(deps).length + 1, 'patch 行数 = 插件数 + 自身行');
 });
 
-test('四个自写子包目录与 cordis.patch.yml 存在，且行 id 沿用约定', () => {
-  for (const sub of ['dsh-plugin-yanyan-update', 'dsh-plugin-yanyan-subagent', 'dsh-plugin-yanyan-icon', 'dsh-plugin-yanyan-session-hub']) {
+test('六个自写子包目录与 cordis.patch.yml 存在，且行 id 沿用约定', () => {
+  for (const sub of ['dsh-plugin-yanyan-update', 'dsh-plugin-yanyan-subagent', 'dsh-plugin-yanyan-icon', 'dsh-plugin-yanyan-session-hub', 'dsh-find-right-plugin']) {
     assert.ok(existsSync(join(root, 'packages', sub, 'cordis.patch.yml')), `${sub} 缺少 cordis.patch.yml`);
   }
   const ids = new Set(patchRows().map((r) => r.id));
   assert.ok(ids.has('dsh-plugin-yanyan-update'));
   assert.ok(ids.has('dsh-plugin-yanyan-subagent'));
-  assert.ok(ids.has('session-archive'));
+  assert.ok(!ids.has('session-archive'), '第三方 session-archive loader 行应已剔除');
   assert.ok(ids.has('yanyan-toolkit-compat'));
   assert.ok(ids.has('dsh-plugin-yanyan-icon'));
   assert.ok(ids.has('dsh-plugin-yanyan-session-hub'));
+  assert.ok(ids.has('dsh-find-right-plugin'));
 });

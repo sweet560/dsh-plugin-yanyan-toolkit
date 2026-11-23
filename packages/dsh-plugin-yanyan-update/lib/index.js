@@ -16,7 +16,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 export const name = 'dsh-plugin-yanyan-update';
-export const VERSION = '1.2.1';
+export const VERSION = '1.2.3';
 export const inject = ['webServer', 'connection'];
 export const ROUTE_BASE = '/__dsh-plugin-yanyan-update';
 
@@ -141,7 +141,7 @@ export function classifySpec(name, spec) {
     return { kind: 'github', name: n, spec: s };
   }
   // ③ 官方包与自身 → skip（官方随 DSH 本体升级；禁自更新避免把正在服务的路由一起移除）
-  if (/^@deepseek-ai\//.test(n) || n === '@linxin666/dsh-session-archive' ||
+  if (/^@deepseek-ai\//.test(n) ||
       /^dsh-plugin-yanyan-/.test(n) || n === 'dsh-plugin-yanyan-update') {
     return { kind: 'skip', name: n, spec: s };
   }
@@ -431,7 +431,6 @@ function isValidId(id, deps) {
 
 function isProtected(id) {
   return /^dsh-plugin-yanyan-/.test(id) ||
-    id === '@linxin666/dsh-session-archive' ||
     /^@deepseek-ai\//.test(id);
 }
 
@@ -517,27 +516,30 @@ export function parseUpdateResult(outcome) {
   });
 }
 
-async function updateLocal(id, cls, profileDir, cfg) {
+async function updateLocal(id, cls, profileDir, cfg, io) {
   const base = { ok: false, updated: false, restartRequired: false, id };
   const dir = cls.dir || '';
   const absDir = path.isAbsolute(dir) ? dir : path.join(profileDir, dir);
-  const gitRoot = findGitRoot(absDir);
+  // io 仅供单测注入；生产环境走真实的 findGitRoot / git。
+  const resolveRoot = (io && typeof io.gitRootResolver === 'function') ? io.gitRootResolver : findGitRoot;
+  const runGit = (io && typeof io.gitRunner === 'function') ? io.gitRunner : git;
+  const gitRoot = resolveRoot(absDir);
   if (!gitRoot) {
     return Object.assign({}, base, { error: 'localNoGit', message: '本地源码，无法自动更新' });
   }
   try {
-    const branch = git(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], cfg.timeoutMs);
+    const branch = runGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'], cfg.timeoutMs);
     if (!branch || branch === 'HEAD') {
       return Object.assign({}, base, { error: 'detachedHead', message: '当前处于游离 HEAD，请手动更新。' });
     }
-    git(gitRoot, ['fetch', 'origin', branch], cfg.timeoutMs);
-    const head = git(gitRoot, ['rev-parse', 'HEAD'], cfg.timeoutMs);
-    const remote = git(gitRoot, ['rev-parse', 'origin/' + branch], cfg.timeoutMs);
+    runGit(gitRoot, ['fetch', 'origin', branch], cfg.timeoutMs);
+    const head = runGit(gitRoot, ['rev-parse', 'HEAD'], cfg.timeoutMs);
+    const remote = runGit(gitRoot, ['rev-parse', 'origin/' + branch], cfg.timeoutMs);
     if (head === remote) {
       return { ok: true, updated: false, restartRequired: false, id,
         reason: 'already-latest', message: '已是最新版本，无需更新。' };
     }
-    git(gitRoot, ['merge', '--ff-only', 'origin/' + branch], cfg.timeoutMs);
+    runGit(gitRoot, ['merge', '--ff-only', 'origin/' + branch], cfg.timeoutMs);
     return { ok: true, updated: true, restartRequired: true, id,
       message: '更新完成，重启 DSH 服务后生效。' };
   } catch (error) {
@@ -775,6 +777,85 @@ export async function updateRegistry(ctx, id, cfg, deps, io) {
   }
 }
 
+// ───────────────── 单条 / 批量共用的更新编排 ─────────────────
+// 单条路由与「一键更新全部」走完全相同的准入裁决与更新路径，安全约束不降级。
+function validateUpdateId(id, deps) {
+  const base = { ok: false, updated: false, restartRequired: false, id };
+  if (!isValidId(id, deps)) {
+    return { ok: false, result: Object.assign({}, base, {
+      error: 'invalid-id',
+      message: '插件标识不合法或不在已安装名单中。',
+    }) };
+  }
+  if (isProtected(id)) {
+    return { ok: false, result: Object.assign({}, base, {
+      error: 'forbidden-self-update',
+      message: '该插件不允许在此更新。',
+    }) };
+  }
+  return { ok: true };
+}
+
+// 对单个已通过校验的 id 执行更新；io 仅供单测注入，生产调用省略。
+async function runUpdateForId(ctx, cfg, id, prof, io) {
+  let cls;
+  try {
+    cls = classifySpec(id, prof.deps[id]);
+  } catch (error) {
+    cls = { kind: 'skip', name: id, spec: prof.deps[id] };
+  }
+  let result;
+  try {
+    if (cls.kind === 'local') {
+      result = await updateLocal(id, cls, prof.profileDir, cfg, io);
+    } else if (cls.kind === 'registry') {
+      result = await updateRegistry(ctx, id, cfg, prof.deps, io);
+    } else if (cls.kind === 'github') {
+      result = { ok: false, updated: false, restartRequired: false, id,
+        error: 'unsupported', message: '该来源暂不支持一键更新，请到源码目录手动更新。' };
+    } else {
+      result = { ok: false, updated: false, restartRequired: false, id,
+        error: 'skip', message: '该插件不需要在此更新。' };
+    }
+  } catch (error) {
+    result = { ok: false, updated: false, restartRequired: false, id,
+      error: 'update-exception', message: String((error && error.message) || error) };
+  }
+  return result;
+}
+
+// 纯函数式批量更新：按传入顺序逐条执行，单条失败不影响其它；io 仅供单测注入。
+export async function updateAll(ctx, ids, cfg, prof, io) {
+  const list = Array.isArray(ids) ? ids : [];
+  const results = [];
+  for (const rawId of list) {
+    const id = typeof rawId === 'string' ? rawId.trim() : '';
+    const base = { ok: false, updated: false, restartRequired: false, id };
+    const v = validateUpdateId(id, prof.deps);
+    if (!v.ok) {
+      results.push(v.result);
+      continue;
+    }
+    let result;
+    try {
+      result = await runUpdateForId(ctx, cfg, id, prof, io);
+    } catch (error) {
+      result = Object.assign({}, base, {
+        error: 'update-exception', message: String((error && error.message) || error),
+      });
+    }
+    results.push(result);
+  }
+  const succeeded = results.filter((r) => r && r.ok === true && r.updated === true).length;
+  return {
+    ok: true,
+    total: results.length,
+    succeeded,
+    failed: results.length - succeeded,
+    results,
+  };
+}
+
 // ───────────────── 路由 handler ─────────────────
 function makeHealthHandler(ctx, cfg, fence) {
   return function healthHandler(req, res) {
@@ -849,47 +930,49 @@ function makeUpdateHandler(ctx, cfg, fence) {
       respond(res, 200, Object.assign({}, base, { error: prof.error, message: prof.message }));
       return;
     }
-    if (!isValidId(id, prof.deps)) {
-      respond(res, 200, Object.assign({}, base, {
-        error: 'invalid-id',
-        message: '插件标识不合法或不在已安装名单中。',
-      }));
+    const v = validateUpdateId(id, prof.deps);
+    if (!v.ok) {
+      respond(res, 200, v.result);
       return;
     }
-    if (isProtected(id)) {
-      respond(res, 200, Object.assign({}, base, {
-        error: 'forbidden-self-update',
-        message: '该插件不允许在此更新。',
-      }));
-      return;
-    }
-    let cls;
-    try {
-      cls = classifySpec(id, prof.deps[id]);
-    } catch (error) {
-      cls = { kind: 'skip', name: id, spec: prof.deps[id] };
-    }
-    let result;
-    try {
-      if (cls.kind === 'local') {
-        result = await updateLocal(id, cls, prof.profileDir, cfg);
-      } else if (cls.kind === 'registry') {
-        result = await updateRegistry(ctx, id, cfg, prof.deps);
-      } else if (cls.kind === 'github') {
-        result = Object.assign({}, base, {
-          error: 'unsupported',
-          message: '该来源暂不支持一键更新，请到源码目录手动更新。',
-        });
-      } else {
-        result = Object.assign({}, base, { error: 'skip', message: '该插件不需要在此更新。' });
-      }
-    } catch (error) {
-      result = Object.assign({}, base, {
-        error: 'update-exception',
-        message: String((error && error.message) || error),
-      });
-    }
+    const result = await runUpdateForId(ctx, cfg, id, prof);
     respond(res, 200, result);
+  };
+}
+
+function makeUpdateAllHandler(ctx, cfg, fence) {
+  return async function updateAllHandler(req, res) {
+    if (!fence(req)) {
+      respond(res, 403, FORBIDDEN_BODY);
+      return;
+    }
+    const method = String(req.method || 'GET').toUpperCase();
+    if (method !== 'POST') {
+      respond(res, 405, { ok: false, error: 'method-not-allowed', message: '只接受 POST 请求。' });
+      return;
+    }
+    let payload;
+    try {
+      const read = await readBody(req);
+      payload = read.ok ? JSON.parse(read.text || '{}') : {};
+    } catch (error) {
+      payload = {};
+    }
+    const ids = payload && Array.isArray(payload.ids) ? payload.ids : [];
+    const prof = readProfile(ctx);
+    if (prof.error) {
+      respond(res, 200, { ok: false, error: prof.error, message: prof.message,
+        total: 0, succeeded: 0, failed: 0, results: [] });
+      return;
+    }
+    try {
+      const result = await updateAll(ctx, ids, cfg, prof);
+      respond(res, 200, result);
+    } catch (error) {
+      respond(res, 200, { ok: false, error: 'update-all-exception',
+        message: String((error && error.message) || error),
+        total: 0, succeeded: 0, failed: 0, results: [] });
+    }
   };
 }
 
@@ -908,6 +991,7 @@ export function apply(ctx, config) {
     { path: ROUTE_BASE + '/health', handler: makeHealthHandler(ctx, cfg, fence) },
     { path: ROUTE_BASE + '/check', handler: makeCheckHandler(ctx, cfg, fence) },
     { path: ROUTE_BASE + '/update', handler: makeUpdateHandler(ctx, cfg, fence) },
+    { path: ROUTE_BASE + '/update-all', handler: makeUpdateAllHandler(ctx, cfg, fence) },
   ];
   // register 的返回值直接作为 effect 的清理函数，禁用 / HMR 时路由自动撤销。
   for (const route of routes) {

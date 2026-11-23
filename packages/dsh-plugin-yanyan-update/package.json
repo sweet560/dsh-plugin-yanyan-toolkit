@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-yanyan-update",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "插件更新：检查本地与线上插件版本并逐个更新",
   "type": "module",
   "main": "lib/index.js",

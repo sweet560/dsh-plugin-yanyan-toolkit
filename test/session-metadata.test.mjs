@@ -679,6 +679,80 @@ test('service.deleteArchived 归档幽灵直接解档清理，不走 trash→pur
   assert.ok(unarchived.includes(ghost), '归档幽灵应从归档清单移除（含其拼写变体）');
 });
 
+// —— 归档幽灵 + projcache 残留（m00324）：projcache/*.json 残留不得当"非幽灵"依据 ——
+// 真机：会话在归档清单 + projcache 索引里、但物理日志目录已清理；locate() 只扫两层物理
+// 目录必然找不到 → 旧版 isPhysicalGhost 因 inIndex=true（projcache 残留）漏判幽灵 →
+// 落入 notTrashed → trash() preflight locate() 报 "not found by locate()" 整批删不掉。
+// 本用例的 fs 特意提供 readdirSync，让 projcache 残留进入判定，精确回归该场景。
+test('service.deleteArchived 归档幽灵即使 projcache 有残留也直接解档清理（m00324）', async () => {
+  const bareGhost = 'mnemon-run-v1-5ab2ba24-projcache'; // 裸 id，贴近真机 mnemon-run-v1-...
+  const projcacheDir = join(HOME, 'storages', 'session_projcache', 'sessions');
+  const cacheFile = join(projcacheDir, bareGhost + '.json');
+  const workspacePath = join(HOME, 'storages', 'workspace.json');
+  const unarchived = [];
+  const trashCalls = [];
+  const purgeCalls = [];
+  const fs = {
+    existsSync: (p) => p === projcacheDir || p === cacheFile || p === workspacePath,
+    readFileSync: (p) => {
+      if (p === cacheFile) {
+        // 真机 projcache 残留含 title/blank；但这是投影缓存，不是物理会话
+        return JSON.stringify({ record: { rows: { title: { val: 'Mnemon skill review' } } } });
+      }
+      if (p === workspacePath) {
+        return JSON.stringify({ tables: { workspaces: {} }, global: { archivedSessionIds: [bareGhost] } });
+      }
+      throw new Error('ENOENT ' + p);
+    },
+    readdirSync: (dir) => {
+      if (dir === projcacheDir) return [bareGhost + '.json']; // projcache 有残留索引
+      return []; // sessions 物理目录已清理（两层都空）
+    },
+    statSync: (p) => {
+      if (p === cacheFile) return { size: 100, isDirectory: () => false };
+      throw new Error('ENOENT ' + p);
+    },
+    writeFileSync: () => {},
+    renameSync: () => {},
+    unlinkSync: () => {},
+    mkdirSync: () => {},
+  };
+  const registry = {
+    archivedSessionIds: [bareGhost],
+    unarchiveSession: async (id) => { unarchived.push(id); return { archivedSessionIds: [] }; },
+  };
+  // 真机 trash() preflight：locate() 只扫两层物理目录，本用例没有任何物理目录，
+  // 故任何走到 trash 的 id 都会抛 "not found by locate()"（整批 fail-closed）。
+  // 这样旧代码若把幽灵误判为 notTrashed 就会失败，本用例才能真实回归 m00324。
+  const trashService = {
+    isTrashed: () => false,
+    trash: async (ids) => {
+      trashCalls.push(...ids);
+      throw new Error(`session ${ids[0]} not found by locate()`);
+    },
+    purge: async (ids) => { purgeCalls.push(...ids); return { ok: true, results: ids.map((id) => ({ id, status: 'ok' })) }; },
+  };
+  const service = createSessionHubService({}, {
+    dshHome: HOME,
+    fs,
+    store: {
+      snapshot: () => ({ folders: {}, sessions: {} }), allTags: () => [], overview: () => ({}), listFolders: () => [],
+      deleteSession: async () => ({ ok: true, deleted: true }),
+    },
+    searchIndex: { listSessions: () => [] },
+    exporter: { export: async () => ({ ok: true }) },
+    trashService,
+    registry,
+    autoIndex: false,
+  });
+  const res = await service.deleteArchived([bareGhost]);
+  assert.equal(res.ok, true, '归档幽灵即使 projcache 有残留也应清理成功，不整批失败');
+  assert.deepEqual(res.done, [bareGhost], '幽灵计入 done');
+  assert.equal(trashCalls.length, 0, '归档幽灵不得走 trash（preflight locate 必然失败）');
+  assert.equal(purgeCalls.length, 0, '归档幽灵无物理可 purge');
+  assert.ok(unarchived.includes(bareGhost), '归档幽灵应从归档清单解档');
+});
+
 // —— 归档口径对齐（m04137）：归档清单里的会话即使物理已无也保留，与「会话归档管理」56 口径一致 ——
 test('service.list 归档清单会话（物理已无）也保留，与归档管理口径对齐（m04137）', async () => {
   const archivedOnly = 'session-arch-only-no-data';
@@ -705,6 +779,52 @@ test('service.list 归档清单会话（物理已无）也保留，与归档管�
   const res = await service.list();
   assert.equal(res.items.some((x) => x.id === archivedOnly || x.id === archivedOnly.replace(/^session-/, '')), true,
     '归档清单里的会话应保留，与会话归档管理的计数口径一致');
+});
+
+// —— 物理目录兜底（m00581）：仅物理目录存在、四路元数据全无的会话也计入「会话总数」 ——
+test('service.list 补进仅有物理目录的会话，与归档管理「全部」总数口径对齐（m00581）', async () => {
+  const orphanBare = 'mnemon-run-v1-orphan';
+  const orphanCanon = 'session-' + orphanBare;
+  const sessionsRoot = join(HOME, 'sessions');
+  const projectDir = join(sessionsRoot, 'proj-x');
+  const orphanDir = join(projectDir, orphanBare);
+  const fs = {
+    existsSync: (p) => {
+      const s = String(p);
+      return s === sessionsRoot || s === projectDir || s === orphanDir || s.endsWith('workspace.json');
+    },
+    readFileSync: (p) => {
+      if (String(p).endsWith('workspace.json')) {
+        return JSON.stringify({ tables: { workspaces: {} }, global: { archivedSessionIds: [] } });
+      }
+      throw new Error('ENOENT ' + p);
+    },
+    readdirSync: (p) => {
+      const s = String(p);
+      if (s === sessionsRoot) return ['proj-x'];
+      if (s === projectDir) return [orphanBare];
+      return []; // 空壳目录无文件；projcache 等路径也无命中
+    },
+    statSync: (p) => {
+      const s = String(p);
+      if (s === projectDir || s === orphanDir) return { isDirectory: () => true };
+      throw new Error('ENOENT ' + p);
+    },
+  };
+  const service = createSessionHubService({}, {
+    dshHome: HOME,
+    fs,
+    store: { snapshot: () => ({ folders: {}, sessions: {} }), allTags: () => [], overview: () => ({}), listFolders: () => [] },
+    searchIndex: { listSessions: () => [] },
+    exporter: { export: async () => ({ ok: true }) },
+    trashService: { list: async () => ({ ok: true, entries: [], count: 0 }) },
+    autoIndex: false,
+  });
+  const res = await service.list();
+  const orphan = res.items.find((x) => x.id === orphanCanon);
+  assert.ok(orphan, '仅物理目录存在的会话应计入列表，与会话归档管理「全部」总数一致');
+  assert.equal(orphan.physicalOnly, true, '标记为物理目录兜底条目');
+  assert.equal(res.overview.total, res.items.length, 'overview.total 用实际列表数');
 });
 
 // —— 回收站过滤（m00490）：移入回收站的会话即使归档清单仍有残留，也不得混进会话/归档列表 ——

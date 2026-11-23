@@ -491,6 +491,7 @@ window.__ModuleLoader__.load({
       this._searchTimer = null;
       this._pollTimer = null;
       this._searchSeq = 0;
+      this._loadSeq = 0; // 列表请求序号：只有最新一次 load 的回包允许写入 store，防止旧回包覆盖新状态。
       this._lastIndexedSessions = -1;
       this.store = createStore({
         status: "idle",
@@ -519,7 +520,13 @@ window.__ModuleLoader__.load({
     HubController.prototype.load = function () {
       var self = this;
       this.store.set({ status: "loading" });
+      // 序号防竞态（同 search 的 _searchSeq）：归档/删除会触发 load()，而后台轮询的
+      // refreshItems() 可能已在更早时刻发出请求。若旧回包晚于本次 load 回包到达，
+      // 旧 archived 状态会覆盖新数据 → 批量删除分组读到陈旧值（m00012 偶发 bug）。
+      // 只让最新一次列表请求的回包写入 store。
+      var seq = ++this._loadSeq;
       return this.api.list().then(function (res) {
+        if (seq !== self._loadSeq) return; // 过期回包丢弃
         self.store.set({
           status: "ready",
           items: Array.isArray(res.items) ? res.items : [],
@@ -530,6 +537,7 @@ window.__ModuleLoader__.load({
           overview: res.overview || { folderCounts: {}, tagCounts: {}, total: 0 },
         });
       }).catch(function (err) {
+        if (seq !== self._loadSeq) return;
         self.store.set({ status: "error", last: { error: String((err && err.message) || err) } });
       });
     };
@@ -587,7 +595,11 @@ window.__ModuleLoader__.load({
       // 写操作进行中（busy）不刷新，避免覆盖用户刚提交的编辑回显。
       if (this.store.getSnapshot().status === "busy") return Promise.resolve();
       this._refreshInFlight = true;
+      // 与 load() 共用 _loadSeq：若发请求后又有 load()（如刚归档完），
+      // 本次回包已过期，丢弃以免覆盖 load() 拿到的最新归档态（m00012）。
+      var seq = this._loadSeq;
       return this.api.list().then(function (res) {
+        if (seq !== self._loadSeq) return;
         self.store.set({
           items: Array.isArray(res.items) ? res.items : [],
           folders: Array.isArray(res.folders) ? res.folders : [],
@@ -698,6 +710,34 @@ window.__ModuleLoader__.load({
       return this._archiveMutate(this.api.deleteAny(ids), "delete");
     };
     /**
+     * 按归档状态把 ids 分成两组，依据【后端权威 /list】而非本地 UI 快照。
+     * m00012：确认文案此前直接用渲染层的 viewShown 分组，而单条手动归档后
+     * _archiveMutate 先把 archiving 置 false 再异步 load()，按钮短暂可用的窗口里
+     * viewShown 仍是旧归档态 → 文案显示「3 归档 1 未归档」。这里在点击时重新拉一次
+     * /list（后端读原生清单 + 本地账本，archive 已在 POST 返回前同步写账本），
+     * 拿到的一定是当前权威归档态，从而彻底消除该竞态。
+     * 失败时回退到传入的 viewShown 分组，保证功能不因一次列表请求失败而卡死。
+     */
+    HubController.prototype.groupByArchived = function (ids, fallback) {
+      var self = this;
+      var arr = Array.isArray(ids) ? ids.slice() : [];
+      var fb = fallback || { archivedIds: [], otherIds: arr.slice() };
+      if (arr.length === 0) return Promise.resolve({ archivedIds: [], otherIds: [] });
+      return this.api.list().then(function (res) {
+        var items = Array.isArray(res && res.items) ? res.items : [];
+        if (items.length === 0) return fb; // 空列表不可信，回退
+        var byId = {};
+        items.forEach(function (it) { if (it && it.id) byId[it.id] = it; });
+        var archivedIds = [], otherIds = [];
+        arr.forEach(function (sid) {
+          var it = byId[sid];
+          if (it && it.archived === true) archivedIds.push(sid);
+          else otherIds.push(sid);
+        });
+        return { archivedIds: archivedIds, otherIds: otherIds };
+      }).catch(function () { return fb; });
+    };
+    /**
      * 批量删除：按归档状态分两组，各发一次请求，合并结果。
      * 真机 m02109：原实现把 N 条拆成 N 个单元素并发请求，37 条时后端争抢 workspace.json
      * 导致单条超过前端 15s 超时（signal timed out），还会留下「已解档但没删掉」的未命名幽灵。
@@ -801,6 +841,15 @@ window.__ModuleLoader__.load({
       if (this._searchTimer) clearTimeout(this._searchTimer);
       if (this._pollTimer) clearInterval(this._pollTimer);
       this._searchTimer = null; this._pollTimer = null;
+    };
+    /**
+     * 清空一次性操作结果提示（m01064）。
+     * archiveResult/exportResult/trashResult 是单例 controller 上的瞬时状态，只在 mutate 时设置、
+     * 完成不会再清空；面板关闭再打开（宿主进程常驻、controller 复用）时必须清掉，
+     * 否则上次「已删除 N 个会话」提示会一直残留。与 clearSearch 同类处理（m03594）。
+     */
+    HubController.prototype.clearResults = function () {
+      this.store.set({ archiveResult: null, exportResult: null, trashResult: null });
     };
 
     // ---------- 纯函数（供 __testing 锁契约） ----------
@@ -1313,28 +1362,32 @@ window.__ModuleLoader__.load({
             disabled: busy || archiving || selectedIds.length === 0,
             onClick: function () {
               var canConfirm = typeof window !== "undefined" && typeof window.confirm === "function";
-              // 按归档状态分两组，各发一次批量请求（最多 2 个），避免 N 个并发请求超时。
-              var archivedIds = [], otherIds = [];
+              // 先用渲染层 viewShown 算出一份分组作为兜底，再向后端 /list 取权威归档态重新分组。
+              // m00012：单条手动归档后 viewShown 可能仍是旧状态，直接用它会弹错文案。
+              var fallback = { archivedIds: [], otherIds: [] };
               selectedIds.forEach(function (sid) {
                 var row = viewShown.filter(function (r) { return r.id === sid; })[0];
-                if (row && row.archived) archivedIds.push(sid);
-                else otherIds.push(sid);
+                if (row && row.archived) fallback.archivedIds.push(sid);
+                else fallback.otherIds.push(sid);
               });
-              // 三态确认文案（m00490）：原二态把「已归档+未归档」混合选中一律说成
-              // 「删除 N 个未归档会话」，与用户实际选择不符。混合态单独提示两组数量与后果。
-              var confirmKey, confirmVars = { n: selectedIds.length };
-              if (archivedIds.length > 0 && otherIds.length === 0) confirmKey = "hub.deleteArchivedConfirm";
-              else if (archivedIds.length === 0) confirmKey = "hub.deleteToTrashConfirm";
-              else {
-                confirmKey = "hub.deleteMixedConfirm";
-                confirmVars.na = archivedIds.length;
-                confirmVars.nn = otherIds.length;
-              }
-              if (canConfirm && !window.confirm(t(confirmKey, confirmVars))) return;
-              // 删除成功后清空选中（m00490）：不清会导致已删/已入回收站的会话仍高亮，
-              // 残留 id 再次批量删除时全部落入 otherIds → trashMove 对不存在会话失败，
-              // 表现为「点确定没反应 / 反复弹同样的 N 条」。与其它批量操作（打标签）一致。
-              controller.batchDelete(archivedIds, otherIds).then(function () { setSelectedIds([]); });
+              controller.groupByArchived(selectedIds, fallback).then(function (grouped) {
+                var archivedIds = grouped.archivedIds, otherIds = grouped.otherIds;
+                // 三态确认文案（m00490）：原二态把「已归档+未归档」混合选中一律说成
+                // 「删除 N 个未归档会话」，与用户实际选择不符。混合态单独提示两组数量与后果。
+                var confirmKey, confirmVars = { n: selectedIds.length };
+                if (archivedIds.length > 0 && otherIds.length === 0) confirmKey = "hub.deleteArchivedConfirm";
+                else if (archivedIds.length === 0) confirmKey = "hub.deleteToTrashConfirm";
+                else {
+                  confirmKey = "hub.deleteMixedConfirm";
+                  confirmVars.na = archivedIds.length;
+                  confirmVars.nn = otherIds.length;
+                }
+                if (canConfirm && !window.confirm(t(confirmKey, confirmVars))) return;
+                // 删除成功后清空选中（m00490）：不清会导致已删/已入回收站的会话仍高亮，
+                // 残留 id 再次批量删除时全部落入 otherIds → trashMove 对不存在会话失败，
+                // 表现为「点确定没反应 / 反复弹同样的 N 条」。与其它批量操作（打标签）一致。
+                return controller.batchDelete(archivedIds, otherIds).then(function () { setSelectedIds([]); });
+              });
             },
           }, t("hub.batch.delete"))),
         // 第二排：标签 + 导出（放不下时内部 flex-wrap 自动换第三排）
@@ -1778,6 +1831,9 @@ window.__ModuleLoader__.load({
         // 避免输入框（本地 query 已重置）与结果面板（store.searchQuery 残留）不一致——
         // 否则会出现「输入框空着、却还显示上次匹配结果」的错位。
         controller.clearSearch();
+        // m01064：清空上次遗留的一次性操作结果（如「已删除 1 个会话」），
+        // 与 clearSearch 同理——单例 controller 跨面板开关复用，瞬时提示不能常驻。
+        try { controller.clearResults(); } catch (e) {}
         controller.load();
         // m03594：总览页需要回收站条数，打开时顺带拉一次（进入回收站 tab 仍会再刷新）。
         try { controller.loadTrash(); } catch (e) {}
@@ -1854,7 +1910,12 @@ window.__ModuleLoader__.load({
       return h("div", { className: "ysh-root", "data-dsh-plugin": "dsh-plugin-yanyan-session-hub" },
         h("div", { className: "ysh-head" },
           h("span", { className: "ysh-title" }, t("hub.title")),
-          h("button", { type: "button", className: "ysh-btn ysh-btn-sm", disabled: busy, onClick: function () { controller.load(); } },
+          h("button", { type: "button", className: "ysh-btn ysh-btn-sm", disabled: busy, onClick: function () {
+            // m01064：手动刷新是「回到干净数据」的动作，一并清掉上次的一次性结果提示，
+            // 否则 archiveResult 常驻，顶部绿条在刷新后依旧显示。
+            try { controller.clearResults(); } catch (e) {}
+            controller.load();
+          } },
             ui.status === "loading" ? t("hub.refreshing") : t("hub.refresh"))),
         ui.last && ui.last.ok === false
           ? h("div", { className: "ysh-status ysh-status-err" }, t("hub.saveFailed", { m: ui.last.error }))

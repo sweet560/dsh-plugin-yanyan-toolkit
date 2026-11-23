@@ -15,11 +15,10 @@
 
 删除会**真正移除会话数据并从源头根除目录行**，不再是「归档」。做法分层：
 
-1. 真实会话优先复用现成包 `@linxin666/dsh-session-archive` 的 `POST /api/dsh-session-archive/delete` 物理删除管线（会清理 sqlite rdb、会话目录、投影缓存与归档台账）。
-2. host 侧 `/purge` 路由再兜底清理一遍：会话目录（含 `session-` 前缀两种拼写、realpath 校验不越界）、projcache 文件与父会话 `subagentCatalog` 缓存引用、`workspace.json` 的 `global.archivedSessionIds` 与 `tables.workspaces[*].sessionIds` 记账、`archive-ledger.json` 台账；并用 `workspaceRegistry.unarchiveSession` 摘掉归档标记。
-3. 对 mnemon 虚拟委派（id 形如 `mnemon-run-v1-<uuid>`，不是真实 `session-<uuid>` 会话）直接走第 2 层——这类 id 调用 `archiveSession` 会报 `session/not-found`。
+1. 真实会话由 host 侧 `/purge` 路由直接物理清理：会话目录（含 `session-` 前缀两种拼写、realpath 校验不越界）、projcache 文件与父会话 `subagentCatalog` 缓存引用、`workspace.json` 的 `global.archivedSessionIds` 与 `tables.workspaces[*].sessionIds` 记账、`archive-ledger.json` 台账；并用 `workspaceRegistry.unarchiveSession` 摘掉归档标记。原「优先复用第三方 `/api/dsh-session-archive/delete` 管线」的依赖已随第三方包在 1.4.13 彻底剔除而移除，清理能力完全自持。
+2. 对 mnemon 虚拟委派（id 形如 `mnemon-run-v1-<uuid>`，不是真实 `session-<uuid>` 会话）同样走上面的 host `/purge` 本地清理——这类 id 调用 `archiveSession` 会报 `session/not-found`。
 4. **catalog 根治（v1.2.0）**：`subagentCatalog` 是父会话日志 `session.v4.jsonl.zstd` 里 `subagent/catalog` 事件的 **append-only 投影**（官方 `@deepseek-ai/dsh-chunked-list` 只追加、无删除 API）。因此清缓存、归档、删目录都移除不了底层日志引用，宿主下次 `refreshProjections` 会把条目重建回来。借鉴 `huajiao1998/dsh-plugin-subagent-clean@0.3.0` 的「原位退休」思路（MIT，原始实现 `heiheiha798/dsh-plugin-subagent-delete@0.2.3`），`/purge` 把命中的 `subagent/catalog` 事件**原位改写**为 `{"type":"subagent-delete/retired","seq":<原值>,"time":<原值>,"ignorable":true,"data":{"childId","retiredAt"}}`：`seq`/`time` 原样保留（日志 seq 连续性与压缩事件引用不受影响），而目录投影只在 `type === "subagent/catalog"` 时生成行，于是投影再也不会重建该行。日志解码/编码用 `node:zlib` 的 zstd（Node >= 22.15 / 24），原子 rename 前后各做一次 stat 并发校验；改写失败会排队到 `yanyan-subagent-pending.json`，宿主下次启动补做。
-5. **隐藏清单兜底**：client 侧仍保留持久化隐藏清单 `localStorage['yanyan-subagent.deletedIds']`（存去 `session-` 前缀后的核心 id），在渲染、批量清理、自动清理与官方列表行尾按钮里持续过滤。即便日志改写遇到并发写入/解码失败，已删条目也不会重新出现。
+5. **隐藏清单兜底**：client 侧仍保留持久化隐藏清单 `localStorage['yanyan-subagent.deletedIds']`（存去 `session-` 前缀后的核心 id），在渲染、批量清理与自动清理里持续过滤。即便日志改写遇到并发写入/解码失败，已删条目也不会重新出现。
 6. **内存投影根治（v1.2.1）**：官方「N 个子智能体」浮层（`SubagentHeaderLineage`）只读 client 内存 store `ctx.sessions.list.getSnapshot().projectionsBySession[*].values.subagentCatalog`；宿主对已加载的 live 父会话复用内存 fold state，单纯改磁盘 zstd 日志 / 删 projcache 都不会让它重算，于是磁盘已退休的残留行仍会显示、点进去报 `subagent is unavailable (subagent/not-found)`。为此 host 新增 `collectRetiredIds` 扫全库 `subagent-delete/retired` 日志行，经 `/config` 下发 `hiddenIds`（兼容桥：扩充 `legacy-hidden-ids.json` 让旧 host 进程即时下发）；client 的 `patchProjections` 订阅 `sessions.list`，用宿主自身的 `list.set()` 把隐藏清单里的 childId 从所有 `projectionsBySession[*].values.subagentCatalog` 中持续剔除（幂等收敛、不自激），官方浮层 `directCount` 归零后自动隐藏。这是「一直删不掉」的真正根因层。
 
 **该操作不可逆**，删除前会二次确认；正在运行的子智能体删除时先停止。根会话（lead）本身永不删除。
@@ -45,13 +44,9 @@ profile 提供 `tools` 服务时注册三个纯对象工具，让 Agent 一句�
 - 本地投影读不到时，回退到 host 侧 `/__dsh-plugin-yanyan-subagent/list`（依赖宿主的 `subagents.listDescendants`，服务缺失时返回 `service-unavailable`）。
 - 官方投影没有空闲起点字段（`lastActiveAt` / `idleSince` 均无命中），空闲时长由本插件在内存中按「首次观察到 inactive 的时刻」估算，刷新页面后会重置。
 
-## 官方子智能体列表浮层行尾删除按钮的限制（图3，可选增强）
+## 删除入口说明（图3）
 
-本插件尽力用 `MutationObserver` 在官方子智能体列表浮层 `[data-subagent-panel]` 出现时，给每个 `[role="treeitem"]` 行尾追加一个小删除按钮。但存在已确认的硬限制：
-
-- 官方列表行**没有行级 Slot，也没有 `data-id` 等稳定标识**；行的 `aria-label` 只是 `[primaryLabel, secondary, metrics].join(' ')` 的文本拼接，无法可靠反推出 `sessionId`。
-- 因此点击该按钮时只能拿行文本到本地 `subagentCatalog` 做模糊匹配（名称包含匹配 + 顺序对应）。**只有唯一命中时才会执行删除**；无法唯一定位时会提示「无法定位该子智能体，请在智能体管理标签中删除」。
-- 该 DOM 注入是「脆弱增强」：官方 DOM 结构一旦变化即可能失效，且匹配可能误判。它不保证成功，请优先使用本插件自己的「智能体管理」标签里的行尾删除按钮（那里有确定的 `sessionId`）。
+官方「N 个子智能体」浮层没有行级 Slot，也没有 `data-id` 等稳定标识，无法可靠反推出 `sessionId`，因此本插件**不再向官方面板注入单条删除按钮**。所有删除统一在本插件自己的「智能体管理」浮层中进行——那里有确定的 `sessionId`，走 host `/purge` 本地清理链（见上文「做法分层」）。
 
 ## 配置
 

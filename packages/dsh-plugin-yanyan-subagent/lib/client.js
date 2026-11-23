@@ -78,7 +78,6 @@
         unsupported: '浏览器数据不可用',
         // 扩展键（en 必须逐键对照）。
         confirmDeleteRunning: '该子智能体正在运行，将停止并彻底删除（不可逆）。确定继续？',
-        officialNoMatch: '无法定位该子智能体，请在智能体管理标签中删除',
         idleThreshold: '空闲阈值',
         minutes: '分钟',
         saved: '已保存',
@@ -126,7 +125,6 @@
         unknown: 'Unknown',
         unsupported: 'Browser data unavailable',
         confirmDeleteRunning: 'This subagent is running and will be stopped and deleted permanently (irreversible). Continue?',
-        officialNoMatch: 'Cannot locate this subagent; delete it in the Agent Manager tab',
         idleThreshold: 'Idle threshold',
         minutes: 'min',
         saved: 'Saved',
@@ -755,9 +753,10 @@
       }
 
       // ───────────────── 删除 ─────────────────
-      // 单个删除改为「物理删除」：调 host /purge（复用现成 dsh-session-archive
-      // 的 /delete 物理删除管线 + host 侧清理 catalog 投影引用 / workspace 记账 /
-      // 归档台账 / mnemon 虚拟目录）。成功后把 id 写入本地隐藏清单并从列表移除，
+      // 单个删除改为「物理删除」：调 host /purge，由 host 本地清理会话目录、
+      // projcache 与 catalog 投影引用 / workspace 记账 / 归档台账 / mnemon 虚拟目录
+      // （第三方 dsh-session-archive 已于 1.4.13 剔除，不再依赖其 /delete 管线）。
+      // 成功后把 id 写入本地隐藏清单并从列表移除，
       // 因为 append-only catalog 会在下次刷新时被宿主从日志重建。
       // 每行独立 try/catch 隔离；root 会话绝不删；running 传 stopActivity:true。
       // rootIdOverride：自动清理逐会话巡检时传入该行所属会话的 rootId，
@@ -1478,46 +1477,6 @@
         } catch (e) { return function () {}; }
       }
 
-      // ───────────────── 图3 官方列表行尾加 U+2715（可选增强，尽力而为） ─────────────────
-      // 官方行没有 data-id，无法可靠拿 sessionId；点击时按行文本去本地 catalog
-      // 做模糊匹配（label/name 包含匹配 + 顺序对应），匹配到唯一 id 才删除，
-      // 否则提示到「智能体管理」标签中删除。做不到可靠删除就诚实说明限制。
-      function onOfficialXClick(ctx, item, items) {
-        var text = (item.textContent || '').trim();
-        var rows = filterDeleted(shared.rows).filter(function (r) {
-          return r && r.kind !== 'diagnostic' && r.id;
-        });
-        var matches = [];
-        for (var i = 0; i < rows.length; i++) {
-          var r = rows[i];
-          var l = String(r.label || '').trim();
-          var n = String(r.name || '').trim();
-          if ((l && text.indexOf(l) !== -1) || (n && text.indexOf(n) !== -1)) matches.push(r);
-        }
-        if (matches.length !== 1) {
-          // 顺序对应：用行序号与非诊断 catalog 序号对齐收敛，仍要求文本命中。
-          matches = [];
-          try {
-            var idx = Array.prototype.indexOf.call(items, item);
-            var byOrder = rows[idx];
-            if (byOrder) {
-              var l2 = String(byOrder.label || '').trim();
-              var n2 = String(byOrder.name || '').trim();
-              if ((l2 && text.indexOf(l2) !== -1) || (n2 && text.indexOf(n2) !== -1)) matches = [byOrder];
-            }
-          } catch (e) { matches = []; }
-        }
-        if (matches.length === 1 && matches[0].id) {
-          var row = matches[0];
-          var ok = true;
-          try { ok = root.confirm(isRowRunning(row) ? t('confirmDeleteRunning') : t('confirmDelete')); }
-          catch (e3) { ok = true; }
-          if (ok) deleteOne(ctx, row, isRowRunning(row));
-        } else {
-          try { root.alert(t('officialNoMatch')); } catch (e4) {}
-        }
-      }
-
       function injectOfficialButtons(ctx, panel) {
         // 用户要求：不再往官方「N 个子智能体」面板注入单条删除 X。
         // 保留空函数以兼容既有调用点；删除统一走「子智能体管理」浮层行内 X
@@ -1592,12 +1551,11 @@
         'color:var(--yanyan-muted,#656d76);white-space:nowrap}',
         '.yanyan-stop{color:#9a6700;white-space:normal}',
         '.yanyan-row-state{font-size:11px;color:#cf222e;white-space:nowrap}',
-        '.yanyan-x,.yanyan-official-x{border:none;background:transparent;cursor:pointer;',
+        '.yanyan-x{border:none;background:transparent;cursor:pointer;',
         'color:var(--yanyan-muted,#656d76);font-size:14px;line-height:1;padding:2px 6px;',
         'border-radius:4px;flex:none}',
-        '.yanyan-x:hover,.yanyan-official-x:hover{background:var(--yanyan-danger-bg,#ffebe9);color:#cf222e}',
+        '.yanyan-x:hover{background:var(--yanyan-danger-bg,#ffebe9);color:#cf222e}',
         '.yanyan-x:disabled{opacity:.4;cursor:default}',
-        '.yanyan-official-x{margin-left:auto;font-size:12px}',
         '.yanyan-footer{display:flex;align-items:center;gap:10px;padding:10px 14px;',
         'border-top:1px solid var(--yanyan-border,#d0d7de);flex-wrap:wrap}',
         '.yanyan-threshold{font-size:11px;color:var(--yanyan-muted,#656d76)}',

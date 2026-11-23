@@ -401,3 +401,17 @@ test('session-hub client：批量删除三态确认文案，混合选中单独�
   assert.ok(/confirmVars\.na = archivedIds\.length/.test(src) && /confirmVars\.nn = otherIds\.length/.test(src),
     '混合文案应带出两组会话数量');
 });
+
+test('session-hub client：面板重新打开时清空一次性操作结果提示（m01064）', () => {
+  const src = readFileSync(join(here, '..', 'packages', 'dsh-plugin-yanyan-session-hub', 'lib', 'client.js'), 'utf8');
+  // controller 是 apply 级单例，跨面板开关复用。archiveResult/exportResult/trashResult
+  // 只在 mutate 时设置、从不清空；若挂载时不清，上次「已删除 1 个会话」会一直残留。
+  assert.ok(/HubController\.prototype\.clearResults = function/.test(src), '应有 clearResults 方法');
+  assert.ok(/archiveResult: null, exportResult: null, trashResult: null/.test(src),
+    'clearResults 应把三个一次性结果状态都清空');
+  assert.ok(/clearSearch\(\);[\s\S]{0,160}clearResults\(\)/.test(src),
+    '面板挂载时应在 clearSearch 之后调用 clearResults（与单例复用清理同类）');
+  // 顶部「刷新」按钮也应清结果提示：手动刷新后顶部旧绿条不应残留。
+  assert.ok((src.match(/clearResults\(\)/g) || []).length >= 2,
+    '除挂载清理外，刷新按钮也应调用 clearResults（至少两处调用）');
+});

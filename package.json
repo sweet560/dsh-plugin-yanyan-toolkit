@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-yanyan-toolkit",
-  "version": "1.4.13",
-  "description": "研研工具包：聚合「插件更新」「会话管理」「会话管理中心（三栏 + 回收站）」「子智能体管理（日志根除 + 内存投影根治）」「图标生成」五个可独立开关的插件。",
+  "version": "1.5.0",
+  "description": "研研工具包：聚合「插件更新」「会话管理中心（三栏 + 回收站）」「子智能体管理（日志根除 + 内存投影根治）」「图标生成」「找对插件（dsh-find-right-plugin）」五个可独立开关的插件。",
   "type": "module",
   "main": "lib/index.js",
   "icon": "icon.svg",
@@ -45,9 +45,9 @@
     "dsh-plugin",
     "dsh",
     "plugin-manager",
-    "session-archive",
     "subagent",
     "icon-generator",
+    "plugin-finder",
     "toolkit",
     "cordis",
     "npm-package",
@@ -78,7 +78,7 @@
     "dsh-plugin-yanyan-subagent": "file:./packages/dsh-plugin-yanyan-subagent",
     "dsh-plugin-yanyan-icon": "file:./packages/dsh-plugin-yanyan-icon",
     "dsh-plugin-yanyan-session-hub": "file:./packages/dsh-plugin-yanyan-session-hub",
-    "@linxin666/dsh-session-archive": "^0.4.18"
+    "dsh-find-right-plugin": "file:./packages/dsh-find-right-plugin"
   },
   "dsh": {
     "engines": {

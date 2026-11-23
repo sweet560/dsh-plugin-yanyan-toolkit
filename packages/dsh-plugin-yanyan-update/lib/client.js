@@ -37,6 +37,9 @@
         close: '关闭',
         refresh: '刷新',
         restartHint: '更新完成，重启 DSH 服务后生效',
+        updateAll: '一键更新全部',
+        updatingAll: '批量更新中…',
+        summary: '批量更新完成：成功 {ok} 个，失败 {fail} 个',
       };
       var en = {
         check: 'Check updates',
@@ -53,6 +56,9 @@
         close: 'Close',
         refresh: 'Refresh',
         restartHint: 'Updated. Restart the DSH service to apply.',
+        updateAll: 'Update all',
+        updatingAll: 'Updating all…',
+        summary: 'Update all done: {ok} succeeded, {fail} failed',
       };
 
       var CSS = [
@@ -74,6 +80,8 @@
         '.yyup-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:10px;}',
         '.yyup-ghost{background:transparent;border:1px solid var(--yyup-panel-border,#d1d5db);border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;color:inherit;}',
         '.yyup-ghost:hover{background:var(--yyup-panel-border,#f3f4f6);}',
+        '.yyup-allbtn{background:var(--dsw-alias-button-primary-fill,#4f46e5);color:var(--dsw-alias-label-primary-foreground,#fff);border:0;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;margin-right:auto;}',
+        '.yyup-allbtn:hover{background:var(--dsw-alias-button-primary-hover,#4338ca);}',
       ].join('\n');
 
       var inject = ['locale'];
@@ -97,6 +105,8 @@
         var hint = null;
         var refreshBtn = null;
         var closeBtn = null;
+        var allBtn = null;
+        var currentUpdates = []; // 最近一次检查到的可更新插件 [{id,...}]
         var busy = false;
         var ensureTimer = null;
         var observer = null;
@@ -157,6 +167,13 @@
 
           var foot = document.createElement('div');
           foot.className = 'yyup-foot';
+          allBtn = document.createElement('button');
+          allBtn.type = 'button';
+          allBtn.className = 'yyup-allbtn';
+          allBtn.setAttribute('data-update-all', '');
+          allBtn.textContent = tr('updateAll');
+          allBtn.style.display = 'none'; // 仅在可更新插件 >= 2 时显示
+          foot.appendChild(allBtn);
           refreshBtn = document.createElement('button');
           refreshBtn.type = 'button';
           refreshBtn.className = 'yyup-ghost';
@@ -212,9 +229,22 @@
           list.appendChild(li);
         }
 
+        // 「一键更新全部」仅在本次检查出 2 个及以上可更新插件时显示，
+        // 0 或 1 个时隐藏（单个插件直接点行内「更新」即可）。
+        function syncAllButton() {
+          if (!allBtn) return;
+          var usable = currentUpdates.filter(function (u) {
+            return u && u.id && u.hasUpdate !== false;
+          });
+          allBtn.style.display = usable.length >= 2 ? '' : 'none';
+          allBtn.textContent = tr('updateAll');
+        }
+
         function renderUpdates(updates) {
           if (!list) return;
           list.textContent = '';
+          currentUpdates = Array.isArray(updates) ? updates.slice() : [];
+          syncAllButton();
           if (!updates || !updates.length) {
             renderMessage(tr('noUpdates'));
             return;
@@ -259,6 +289,8 @@
           }
           clearHint();
           openPanel();
+          currentUpdates = [];
+          syncAllButton();
           renderMessage(tr('checking'));
           post(BASE + '/check', {}).then(function (data) {
             if (!data || data.ok !== true) throw new Error('invalid-response');
@@ -275,32 +307,92 @@
           });
         }
 
+        // 按插件 id 找到该行的 li 与按钮，供单条与批量更新共用回填逻辑。
+        function findRowParts(id) {
+          var li = list ? list.querySelector('[data-yanyan-update-row="' + id + '"]') : null;
+          var btn = li ? li.querySelector('[data-update-row]') : null;
+          return { li: li, btn: btn };
+        }
+
+        // 把一条更新结果回填到对应行；返回该条是否更新成功。
+        function applyRowResult(id, result) {
+          var parts = findRowParts(id);
+          var li = parts.li;
+          var btn = parts.btn;
+          var ok = Boolean(result && result.ok === true && result.updated === true);
+          if (ok) {
+            if (li) li.setAttribute('data-yanyan-update-state', 'updated');
+            if (btn) {
+              btn.textContent = tr('updated');
+              btn.disabled = true;
+            }
+            return true;
+          }
+          var msg = (result && result.message) || tr('failed');
+          if (btn) {
+            btn.textContent = tr('failed');
+            btn.disabled = false;
+          }
+          // 失败结果（含「已装回原版本 / 需手动重装」）必须让用户看见，
+          // 不能只塞进行 title。
+          showHint(String(msg));
+          if (li) li.setAttribute('title', String(msg));
+          return false;
+        }
+
         function runUpdate(id, li, btn) {
           if (!id || btn.disabled) return;
           btn.disabled = true;
           btn.textContent = tr('updating');
           // 每行独立 try/catch：单条失败不影响其它行。
           post(BASE + '/update', { id: id }).then(function (data) {
-            if (data && data.ok === true && data.updated === true) {
-              if (li) li.setAttribute('data-yanyan-update-state', 'updated');
-              btn.textContent = tr('updated');
-              // host 会返回可读中文结果（含「已即时生效 / 重启后生效」），优先展示。
-              showHint((data && data.message) || tr('restartHint'));
-            } else {
-              var msg = (data && data.message) || tr('failed');
-              btn.textContent = tr('failed');
-              btn.disabled = false;
-              // 失败结果（含「已装回原版本 / 需手动重装」）必须让用户看见，
-              // 不能只塞进行 title。
-              showHint(String(msg));
-              if (li) li.setAttribute('title', String(msg));
-            }
+            var ok = applyRowResult(id, data);
+            // host 会返回可读中文结果（含「已即时生效 / 重启后生效」），优先展示。
+            if (ok) showHint((data && data.message) || tr('restartHint'));
           }).catch(function (error) {
-            var msg = (error && error.message) || tr('failed');
-            btn.textContent = msg;
-            btn.disabled = false;
-            showHint(String(msg));
-            if (li) li.setAttribute('title', String(msg));
+            applyRowResult(id, { message: (error && error.message) || tr('failed') });
+          });
+        }
+
+        // 一键更新全部：把当前列表里的可更新插件一次性提交给 host 批量路由。
+        function runUpdateAll() {
+          if (busy || !allBtn || allBtn.style.display === 'none') return;
+          var ids = [];
+          for (var i = 0; i < currentUpdates.length; i++) {
+            var u = currentUpdates[i];
+            if (u && u.id && u.hasUpdate !== false && ids.indexOf(u.id) < 0) ids.push(u.id);
+          }
+          if (!ids.length) return;
+          busy = true;
+          allBtn.textContent = tr('updatingAll');
+          clearHint();
+          openPanel();
+          // 先把所有参与更新的按钮置为更新中，给出即时反馈。
+          for (var j = 0; j < ids.length; j++) {
+            var parts = findRowParts(ids[j]);
+            if (parts.btn) {
+              parts.btn.disabled = true;
+              parts.btn.textContent = tr('updating');
+            }
+          }
+          post(BASE + '/update-all', { ids: ids }).then(function (data) {
+            var results = (data && Array.isArray(data.results)) ? data.results : [];
+            var okCount = 0;
+            var failCount = 0;
+            for (var k = 0; k < results.length; k++) {
+              var row = results[k] || {};
+              if (applyRowResult(row.id, row)) okCount += 1;
+              else failCount += 1;
+            }
+            // host 未逐条返回时，按请求条数兜底统计为失败。
+            if (!results.length) failCount = ids.length;
+            var summary = tr('summary').replace('{ok}', String(okCount)).replace('{fail}', String(failCount));
+            showHint(summary);
+          }).catch(function (error) {
+            showHint((error && error.message) || tr('fetchFailed'));
+          }).then(function () {
+            busy = false;
+            syncAllButton();
           });
         }
 
@@ -310,6 +402,10 @@
           if (!btn) return;
           if (btn.hasAttribute('data-update-check') || btn.hasAttribute('data-update-refresh')) {
             runCheck();
+            return;
+          }
+          if (btn.hasAttribute('data-update-all')) {
+            runUpdateAll();
             return;
           }
           if (btn.hasAttribute('data-update-close')) {

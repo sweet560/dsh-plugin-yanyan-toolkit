@@ -2,7 +2,40 @@
 
 All notable changes to this project are documented here.
 
-## 未发布
+## 1.5.0 — 2026-11-23（正式发布）
+
+> 功能性发布：新增「找对插件」子包、更新包「一键更新全部」、图标包「点击预览放大查看」，并修复会话结果提示残留。全量同步中英简介、插件页描述、组件版本表与文档文案，与本版本实际功能一致。
+
+### 版本总览
+
+| 组件 | 版本 |
+|---|---|
+| `dsh-plugin-yanyan-toolkit`（聚合根包） | **1.5.0** |
+| `dsh-plugin-yanyan-subagent`（子智能体管理） | 1.4.12 |
+| `dsh-plugin-yanyan-session-hub`（会话管理中心） | 1.0.19 |
+| `dsh-plugin-yanyan-update` | 1.2.3 |
+| `dsh-plugin-yanyan-icon` | 1.0.3 |
+| `dsh-find-right-plugin`（找对插件） | 1.0.0 |
+
+> 原独立回收站子包 `dsh-plugin-yanyan-trash` 的能力已并入 session-hub，子包已删除；第三方 `@linxin666/dsh-session-archive` 已彻底剔除，均不再列出。
+
+### 变更
+
+#### 新增子包 `dsh-find-right-plugin` 1.0.0
+
+- **新增「找对插件」子包**：`dsh-find-right-plugin` 作为纯 host 工具插件加入聚合包，直接复用独立插件源码，给 agent 注册 `find_dsh_plugins` 工具（聚合 DSH 插件生态，按 相关度×可信度×新鲜度×热度 排序，主推 1 个 + 少量备选，只读不代为安装）。子包版本按独立插件最新记录取 1.0.0，不递增。同步根 `cordis.patch.yml`（五条 loader 行增至六条，含自身行）、`package.json` dependencies 与 description、`lib/index.js` SUBPACKAGES、`lib/client.js` 注释，以及 toolkit / integration / component-versions 三组测试的计数与契约断言；README 中英双语与组件版本列表同步。无 client 半区、无 locale/icon，不参与 UI 组件装载契约。
+
+#### `dsh-plugin-yanyan-session-hub` 1.0.19
+
+- **修复一次性操作结果提示残留（m01064）**：`session-hub` 的 controller 是 apply 级单例，跨设置页面板开关复用；`archiveResult` / `exportResult` / `trashResult` 只在各操作完成时设置、从不清空，导致上次「已删除 1 个会话（0 个失败）」提示在重新打开面板或点「刷新」后一直残留。新增 `HubController.clearResults()`，在面板挂载时（紧随既有的 `clearSearch()` 之后）与顶部「刷新」按钮点击时各调用一次，与 m03594 搜索态残留同类处理；新增/加强回归测试，全量 256/256 通过。
+
+#### `dsh-plugin-yanyan-update` 1.2.3
+
+- **新增「一键更新全部」（m00004）**：当「检查更新」发现 **2 个及以上**可更新插件时，面板底部才显示「一键更新全部」按钮（0 或 1 个时隐藏，单个插件直接点行内「更新」即可），一次点击即可批量更新，无需逐个点「更新」。Host 端抽出 `validateUpdateId` / `runUpdateForId` 共享编排，新增纯函数 `updateAll` 与 `/update-all` 路由，单条路由与批量走同一套准入裁决与更新路径，安全约束（`isValidId` 白名单 / `isProtected` 自身插件保护）不降级，单条失败不影响其它插件继续更新；`updateLocal` 支持 io 注入（`gitRootResolver` / `gitRunner`）便于单测。Client 端新增按钮与批量中状态、逐行结果回填复用 `applyRowResult`、显示「成功 N 个，失败 M 个」中文汇总，检查时清空旧列表，统一由 `syncAllButton()` 按可更新数是否 ≥ 2 控制按钮显隐。新增 5 组批量单测，全量 27/27 通过。同步 package.json 与 lib/index.js 的 `VERSION`（此前二者不一致：1.2.2 / 1.2.1），README 当前版本列表同步至 1.2.3。
+
+#### `dsh-plugin-yanyan-icon` 1.0.3
+
+- **新增「点击预览放大查看」（m00029）**：两个预览图（列表行 30px / 详情卡片 36px）现可点击放大到最高 512px 的 lightbox 遮罩查看，借鉴 session-hub / subagent 既有纯 DOM 浮层风格、零依赖。预览 `<img>` 加 `cursor:zoom-in` 与 `data-yyic-zoom` 标记及 alt/title；新增 `.yyic-lightbox` 系列样式（`position:fixed` 全屏遮罩 + 背景模糊，挂到 `document.body` 避免面板 overflow 裁剪）、`openLightbox(src)` / `closeLightbox()`，点任意处或关闭按钮关闭，ESC 先关 lightbox 再关面板，reset / 清理时一并关闭。单测追加契约标记，icon 包 13/13 通过。子包 1.0.2 → 1.0.3，根包初版安装验证时保持 1.4.13、本次随根包 1.5.0 一并正式发布。
 
 ## 1.4.13 — 2026-11-20（正式发布）
 

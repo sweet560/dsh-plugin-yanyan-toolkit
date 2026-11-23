@@ -33,8 +33,8 @@ const OWN_PKGS = [
   'dsh-plugin-yanyan-subagent',
   'dsh-plugin-yanyan-icon',
   'dsh-plugin-yanyan-session-hub',
+  'dsh-find-right-plugin',
 ];
-const EXTERNAL_PKG = '@linxin666/dsh-session-archive';
 
 test('VERSION 动态等于根包 package.json 版本（不再写死）', () => {
   assert.equal(VERSION, readJson('package.json').version);
@@ -43,15 +43,17 @@ test('VERSION 动态等于根包 package.json 版本（不再写死）', () => {
 
 test('collectVersions 覆盖全部 6 个组件且各自是合法 semver', () => {
   const v = collectVersions();
-  for (const pkg of [...OWN_PKGS, EXTERNAL_PKG]) {
+  for (const pkg of OWN_PKGS) {
     assert.ok(Object.prototype.hasOwnProperty.call(v, pkg), `缺少组件 ${pkg}`);
     assert.match(String(v[pkg]), SEMVER, `${pkg} 版本不合法`);
     assert.ok(!/^[\^~>=<]/.test(String(v[pkg])), `${pkg} 不应残留范围前缀`);
   }
   assert.equal(Object.keys(v).length, 6);
+  // 第三方 dsh-session-archive 已彻底剔除，绝不能再出现在组件清单里。
+  assert.ok(!Object.prototype.hasOwnProperty.call(v, '@linxin666/dsh-session-archive'));
 });
 
-test('五个自写组件版本精确等于各自 package.json，且互不强制一致', () => {
+test('六个自写组件版本精确等于各自 package.json，且互不强制一致', () => {
   const v = collectVersions();
   assert.equal(v['dsh-plugin-yanyan-toolkit'], readJson('package.json').version);
   assert.equal(
@@ -66,19 +68,12 @@ test('五个自写组件版本精确等于各自 package.json，且互不强制�
     v['dsh-plugin-yanyan-icon'],
     readJson('packages/dsh-plugin-yanyan-icon/package.json').version,
   );
+  assert.equal(
+    v['dsh-find-right-plugin'],
+    readJson('packages/dsh-find-right-plugin/package.json').version,
+  );
   // 聚合包 1.4.2 / update 1.2.1 / subagent 1.4.0 / icon 1.0.1 本就不同，正是「独立版本」。
   assert.ok(new Set(OWN_PKGS.map((p) => v[p])).size >= 2);
-});
-
-test('外部组件版本干净：读实装优先，未装时回退声明（去掉 ^）', () => {
-  const v = collectVersions();
-  const got = String(v[EXTERNAL_PKG]);
-  assert.match(got, SEMVER);
-  assert.notEqual(got, 'unknown');
-  const declared = String(readJson('package.json').dependencies[EXTERNAL_PKG])
-    .replace(/^[\^~>=<\s]+/, '');
-  // 没装该包时等于声明；装了则可能更高，二者都合法，但绝不能是范围串。
-  assert.ok(got === declared || SEMVER.test(got));
 });
 
 test('collectVersions(rootDir) 动态读取注入目录，六个版本互不串味', () => {
@@ -88,10 +83,11 @@ test('collectVersions(rootDir) 动态读取注入目录，六个版本互不串�
     mkdirSync(join(dir, 'packages', 'dsh-plugin-yanyan-subagent'), { recursive: true });
     mkdirSync(join(dir, 'packages', 'dsh-plugin-yanyan-icon'), { recursive: true });
     mkdirSync(join(dir, 'packages', 'dsh-plugin-yanyan-session-hub'), { recursive: true });
+    mkdirSync(join(dir, 'packages', 'dsh-find-right-plugin'), { recursive: true });
     writeFileSync(join(dir, 'package.json'), JSON.stringify({
       name: 'dsh-plugin-yanyan-toolkit',
       version: '9.9.9',
-      dependencies: { [EXTERNAL_PKG]: '^7.7.7' },
+      dependencies: {},
     }));
     writeFileSync(
       join(dir, 'packages', 'dsh-plugin-yanyan-update', 'package.json'),
@@ -109,6 +105,10 @@ test('collectVersions(rootDir) 动态读取注入目录，六个版本互不串�
       join(dir, 'packages', 'dsh-plugin-yanyan-session-hub', 'package.json'),
       JSON.stringify({ version: '6.6.6' }),
     );
+    writeFileSync(
+      join(dir, 'packages', 'dsh-find-right-plugin', 'package.json'),
+      JSON.stringify({ version: '8.8.8' }),
+    );
 
     const v = collectVersions(dir);
     assert.equal(v['dsh-plugin-yanyan-toolkit'], '9.9.9');
@@ -116,12 +116,9 @@ test('collectVersions(rootDir) 动态读取注入目录，六个版本互不串�
     assert.equal(v['dsh-plugin-yanyan-subagent'], '3.3.3');
     assert.equal(v['dsh-plugin-yanyan-icon'], '4.4.4');
     assert.equal(v['dsh-plugin-yanyan-session-hub'], '6.6.6');
-    // 临时目录没有 node_modules，外部包应回退声明并去掉 ^。
-    assert.ok(
-      v[EXTERNAL_PKG] === '7.7.7' || SEMVER.test(String(v[EXTERNAL_PKG])),
-      '外部包应回退声明 7.7.7（或读到实装版本）',
-    );
+    assert.equal(v['dsh-find-right-plugin'], '8.8.8');
     assert.equal(Object.keys(v).length, 6);
+    assert.ok(!Object.prototype.hasOwnProperty.call(v, '@linxin666/dsh-session-archive'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -172,6 +169,7 @@ test('components 路由返回 6 个组件版本；health 返回聚合包版本',
   assert.equal(res.status, 200);
   assert.equal(res.body.ok, true);
   assert.equal(Object.keys(res.body.components).length, 6);
+  assert.ok(!Object.prototype.hasOwnProperty.call(res.body.components, '@linxin666/dsh-session-archive'));
   assert.equal(res.body.components['dsh-plugin-yanyan-toolkit'], VERSION);
   assert.equal(res.head['cache-control'], 'no-store');
 
@@ -203,7 +201,6 @@ test('host 半区源码具备 components 路由与准入契约', () => {
     'COMPONENTS_ROUTE',
     'export function collectVersions',
     'readFileSync',
-    'createRequire',
     'requestRejection',
     "register({ kind: 'exact'",
     'ctx.effect',

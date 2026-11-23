@@ -12,10 +12,10 @@
 //   投影（官方 @deepseek-ai/dsh-chunked-list 只追加、无删除）。archiveSession
 //   只是打个标记，既不删会话数据，也移除不了 catalog 引用；对 mnemon 虚拟
 //   委派（id 形如 mnemon-run-v1-<uuid>，不是 session-<uuid> 会话）更会直接
-//   报 session/not-found。所以这里：真实会话优先复用现成的
-//   /api/dsh-session-archive/delete 物理删除管线；无论成功与否，都再做一轮
-//   本地清理（会话目录 / projcache / catalog 引用 / workspace 记账 / 台账 /
-//   归档标记），并把命中条目的 id 交给 client 的持久化隐藏清单兜底。
+//   报 session/not-found。所以这里直接做一轮完整的本地清理（会话目录 /
+//   projcache / catalog 引用 / workspace 记账 / 台账 / 归档标记），并把命中
+//   条目的 id 交给 client 的持久化隐藏清单兜底。第三方 dsh-session-archive
+//   已于 1.4.13 彻底剔除，不再依赖其 /api/dsh-session-archive/delete 管线。
 //
 // 本文件导出的纯函数同时供 test/*.test.mjs 做单元测试，不依赖 DSH 运行时。
 
@@ -57,7 +57,6 @@ export const PURGE_ROUTE = `${ROUTE_BASE}/purge`;
 export const SCRUB_ROUTE = `${ROUTE_BASE}/scrub`;
 export const CLEANUP_ROUTE = `${ROUTE_BASE}/cleanup`;
 export const RUNNING_ROUTE = `${ROUTE_BASE}/running`;
-export const DELETE_API = '/api/dsh-session-archive/delete';
 
 const BODY_LIMIT = 64 * 1024;
 export const DEFAULT_TAB_LABEL = '智能体管理';
@@ -549,28 +548,6 @@ export function makeRunningHandler(ctx) {
   };
 }
 
-/** 真实会话优先复用现成的 dsh-session-archive 物理删除管线。 */
-async function tryOfficialDelete(ctx, id) {
-  try {
-    const ws = typeof ctx.get === 'function' ? ctx.get('webServer') : null;
-    const origin = ws && typeof ws.getOrigin === 'function' ? ws.getOrigin() : '';
-    if (!origin || typeof fetch !== 'function') {
-      return { ok: false, reason: 'webServer/fetch 不可用' };
-    }
-    const canonical = String(id).startsWith('session-') ? id : 'session-' + id;
-    const resp = await fetch(origin.replace(/\/$/, '') + DELETE_API, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ids: [canonical] }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!resp.ok) return { ok: false, reason: 'HTTP ' + resp.status };
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, reason: String((error && error.message) || error) };
-  }
-}
-
 /**
  * 删除一条子智能体的核心逻辑（HTTP handler 与模型工具共用）。
  *
@@ -598,9 +575,8 @@ export async function performPurge(ctx, sessionId, rootSessionId, stopActivity, 
     }
   }
 
-  // 真实会话：优先走现成物理删除管线（会清 sqlite rdb / projcache index）。
-  let official = null;
-  if (!virtual) official = await tryOfficialDelete(ctx, sessionId);
+  // 第三方 dsh-session-archive 已剔除：不再调用其删除管线，
+  // 全部交给下面的本地清理（会话目录 / projcache / workspace 记账 / catalog / 台账）。
 
   // 归档标记：用公开 seam 从 workspaceRegistry 摘掉（比直接改文件更可靠）。
   const registry = typeof ctx.get === 'function' ? ctx.get('workspaceRegistry') : null;
@@ -614,7 +590,6 @@ export async function performPurge(ctx, sessionId, rootSessionId, stopActivity, 
   // 本地兜底清理：会话目录 / projcache / catalog 引用 / workspace 记账 / 台账。
   const report = purgePhysical(dshHome, sessionId, rootSessionId);
   if (!dshHome) warnings.push('未解析到 DSH_HOME，文件级清理已跳过；客户端仍会隐藏该条目。');
-  if (official && !official.ok) warnings.push('现成删除管线未生效：' + official.reason);
 
   // 根治 append-only catalog：把日志里的 catalog 行原位退休（全库扫，父日志优先）。
   // 失败（并发写 / 解码错）会排队到 pending 文件，宿主下次启动补做；本地隐藏
@@ -644,7 +619,6 @@ export async function performPurge(ctx, sessionId, rootSessionId, stopActivity, 
     catalogRemoved: report.catalogRemoved,
     catalogRetired: catalog.removed,
     catalogQueued: catalog.queued,
-    official: official ? official.ok : null,
     warnings,
     message: (catalog.removed > 0 || catalog.queued)
       ? '已物理删除并从父会话日志根除该子智能体，侧边栏残留行不会再被重建。'
@@ -940,7 +914,7 @@ function makeCleanupTool(ctx) {
   };
 }
 
-/** tools 是可选注入：没有该服务时静默降级，绝不让 8 条 HTTP 路由一起加载失败。 */
+/** tools 是可选注入：没有该服务时静默降级，绝不让 9 条 HTTP 路由一起加载失败。 */
 function registerTools(ctx) {
   const definitions = [makeListTool(ctx), makeDeleteTool(ctx), makeCleanupTool(ctx)];
   const attach = (tools) => {

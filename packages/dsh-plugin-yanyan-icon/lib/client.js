@@ -36,6 +36,8 @@
         reset: '重新选择',
         rowLabel: '列表行 30px',
         cardLabel: '详情卡片 36px',
+        zoomTitle: '放大查看',
+        zoomHint: '点击上方预览可放大查看',
         usage: '把下载的 icon.svg 放到插件包根目录，并在 package.json 里声明 "icon": "icon.svg" 与 exports["./icon"]，重启 DSH 后即可在插件列表显示。',
       };
 
@@ -49,14 +51,21 @@
         '.yyic-file{display:block;width:100%;box-sizing:border-box;font-size:12px;margin-bottom:10px;}',
         '.yyic-previews{display:flex;align-items:flex-end;gap:20px;justify-content:center;padding:12px 4px;border:1px dashed var(--yyic-panel-border,#d1d5db);border-radius:8px;margin-bottom:10px;background:var(--yyic-preview-bg,#f9fafb);}',
         '.yyic-pv{text-align:center;}',
-        '.yyic-pv img{display:block;margin:0 auto 6px;border-radius:6px;background:#eef2ff;border:1px solid #c7d2fe;}',
+        '.yyic-pv img{display:block;margin:0 auto 6px;border-radius:6px;background:#eef2ff;border:1px solid #c7d2fe;cursor:zoom-in;}',
         '.yyic-pv span{color:#6b7280;}',
+        '.yyic-zoom-hint{text-align:center;color:#9ca3af;font-size:11px;margin-bottom:10px;}',
         '.yyic-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:6px;}',
         '.yyic-btn{background:var(--dsw-alias-button-primary-fill,#4f46e5);color:var(--dsw-alias-label-primary-foreground,#fff);border:0;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;}',
         '.yyic-btn:disabled{opacity:.5;cursor:default;}',
         '.yyic-ghost{background:transparent;border:1px solid var(--yyic-panel-border,#d1d5db);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;color:inherit;}',
         '.yyic-status{margin-top:8px;color:#b45309;min-height:16px;}',
         '.yyic-usage{margin-top:10px;color:#6b7280;line-height:1.6;border-top:1px solid var(--yyic-panel-border,#f3f4f6);padding-top:8px;}',
+        // 放大查看遮罩：挂到 document.body，fixed 铺满全屏，避免被面板 overflow 裁剪。
+        '.yyic-lightbox{position:fixed;inset:0;z-index:2147483000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:rgba(17,24,39,.78);backdrop-filter:blur(2px);}',
+        '.yyic-lightbox-head{color:#f9fafb;font-size:14px;font-weight:600;}',
+        '.yyic-lightbox img{display:block;width:min(70vmin,512px);height:min(70vmin,512px);image-rendering:auto;border-radius:16px;background:#eef2ff;border:1px solid #c7d2fe;box-shadow:0 16px 48px rgba(0,0,0,.5);cursor:zoom-out;}',
+        '.yyic-lightbox-close{background:var(--dsw-alias-button-primary-fill,#4f46e5);color:var(--dsw-alias-label-primary-foreground,#fff);border:0;border-radius:6px;padding:6px 18px;font-size:13px;cursor:pointer;}',
+        '.yyic-lightbox-close:hover{background:var(--dsw-alias-button-primary-hover,#4338ca);}',
       ].join('\n');
 
       var inject = [];
@@ -68,6 +77,8 @@
         var fileInput = null;
         var previewRow = null;
         var previewCard = null;
+        var lightbox = null;
+        var lightboxImg = null;
         var statusEl = null;
         var downloadBtn = null;
         var generatedSvg = null;
@@ -92,7 +103,9 @@
           var img = document.createElement('img');
           img.width = px;
           img.height = px;
-          img.alt = '';
+          img.alt = T.zoomTitle;
+          img.title = T.zoomTitle;
+          img.setAttribute('data-yyic-zoom', '');
           img.style.width = px + 'px';
           img.style.height = px + 'px';
           wrap.appendChild(img);
@@ -155,6 +168,11 @@
           previews.appendChild(previewRow.wrap);
           previews.appendChild(previewCard.wrap);
           panel.appendChild(previews);
+
+          var zoomHint = document.createElement('div');
+          zoomHint.className = 'yyic-zoom-hint';
+          zoomHint.textContent = T.zoomHint;
+          panel.appendChild(zoomHint);
 
           statusEl = document.createElement('div');
           statusEl.className = 'yyic-status';
@@ -289,8 +307,53 @@
           }
         }
 
+        // 放大查看：把生成用的同一份 data URL 挂到全屏遮罩里的大图上。
+        // lightbox 挂到 document.body 而非面板内，避免被面板 overflow 裁剪。
+        function closeLightbox() {
+          if (lightbox) {
+            try { if (lightbox.parentNode) lightbox.parentNode.removeChild(lightbox); } catch (e) {}
+          }
+          lightbox = null;
+          lightboxImg = null;
+        }
+        function openLightbox(src) {
+          if (!src) return;
+          closeLightbox();
+          var lb = document.createElement('div');
+          lb.className = 'yyic-lightbox';
+          lb.setAttribute('role', 'dialog');
+          lb.setAttribute('aria-label', T.zoomTitle);
+          var head = document.createElement('div');
+          head.className = 'yyic-lightbox-head';
+          head.textContent = T.zoomTitle;
+          lb.appendChild(head);
+          var big = document.createElement('img');
+          big.src = src;
+          big.alt = T.zoomTitle;
+          lb.appendChild(big);
+          var closeBtn = document.createElement('button');
+          closeBtn.type = 'button';
+          closeBtn.className = 'yyic-lightbox-close';
+          closeBtn.setAttribute('data-yyic-lightbox-close', '');
+          closeBtn.textContent = T.close;
+          lb.appendChild(closeBtn);
+          function onLbClick(ev) {
+            // 点大图、关闭按钮或遮罩空白处都关闭。
+            closeLightbox();
+          }
+          try { lb.addEventListener('click', onLbClick); } catch (e) {}
+          lightbox = lb;
+          lightboxImg = big;
+          try { document.body.appendChild(lb); } catch (e) {}
+        }
+
         function onClick(e) {
           var t = e.target;
+          // 点击 30px / 36px 预览图 => 放大查看。
+          if (t && t.getAttribute && t.getAttribute('data-yyic-zoom') !== null && t.src) {
+            openLightbox(t.src);
+            return;
+          }
           var btn = t && t.closest ? t.closest('button') : null;
           if (!btn) return;
           if (btn.hasAttribute('data-yyic-toggle')) {
@@ -301,6 +364,7 @@
           if (btn.hasAttribute('data-yyic-download')) { doDownload(); return; }
           if (btn.hasAttribute('data-yyic-reset')) {
             generatedSvg = null;
+            closeLightbox();
             if (fileInput) fileInput.value = '';
             if (previewRow) previewRow.img.removeAttribute('src');
             if (previewCard) previewCard.img.removeAttribute('src');
@@ -310,9 +374,10 @@
         }
 
         function onKey(e) {
-          if (e.key === 'Escape' || e.keyCode === 27) closePanel();
+          if (e.key === 'Escape' || e.keyCode === 27) { closeLightbox(); closePanel(); }
         }
         function onOutside(e) {
+          if (lightbox) return; // lightbox 全屏，点外部交给它自己处理。
           if (!container || !container.contains(e.target)) closePanel();
         }
 
@@ -367,6 +432,7 @@
             }
             try { document.removeEventListener('keydown', onKey); } catch (e) {}
             try { document.removeEventListener('click', onOutside, true); } catch (e) {}
+            closeLightbox();
             if (objectUrl) { try { URL.revokeObjectURL(objectUrl); } catch (e) {} objectUrl = null; }
             if (container) {
               try { container.removeEventListener('click', onClick); } catch (e) {}
