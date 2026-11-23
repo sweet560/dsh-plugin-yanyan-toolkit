@@ -32,7 +32,7 @@
 
 ## 组件独立版本与显示
 
-聚合包里的每个组件都保留自己独立的 `package.json` 版本（聚合根包与各功能插件可各自发版，互不强求一致）：当前为 `dsh-plugin-yanyan-toolkit` 1.5.0、`dsh-plugin-yanyan-update` 1.2.3、`dsh-plugin-yanyan-subagent` 1.4.12、`dsh-plugin-yanyan-session-hub` 1.0.19（会话管理中心，含回收站）、`dsh-plugin-yanyan-icon` 1.0.3、`dsh-find-right-plugin` 1.0.0（找对插件）。原独立回收站子包 `dsh-plugin-yanyan-trash` 的能力已并入 session-hub，子包已删除；第三方 `@linxin666/dsh-session-archive` 已彻底剔除。
+聚合包里的每个组件都保留自己独立的 `package.json` 版本（聚合根包与各功能插件可各自发版，互不强求一致）：当前为 `dsh-plugin-yanyan-toolkit` 1.5.0、`dsh-plugin-yanyan-update` 1.2.3、`dsh-plugin-yanyan-subagent` 1.4.12、`dsh-plugin-yanyan-session-hub` 1.0.19（会话管理中心，含回收站）、`dsh-plugin-yanyan-icon` 1.0.3、`dsh-find-right-plugin` 1.0.0（找对插件）。
 
 在插件详情页「包含的组件」列表里，每个组件中文标题右侧会显示一个 `v<版本>` 小标签。官方的 `InstalledPluginChild` 协议只有 `id/name/enabled/locked`，不含 `version`，DSH 自身不会渲染组件版本；本包由 host 半区新增 `/__dsh-plugin-yanyan-toolkit/components` 路由**动态读取各组件自己的 `package.json`**（绝不写死，避免失同步），client 半区照抄 `插件更新` 包已有的 `MutationObserver` + `ctx.effect` 注入骨架，按 `[data-plugin-rows] li[data-plugin-row]` 与行内 `<code>` 里的真实包名匹配后注入版本标签，不改 React 管理的 DOM、不误伤其它插件详情页，页面重渲染后自动重挂。
 
