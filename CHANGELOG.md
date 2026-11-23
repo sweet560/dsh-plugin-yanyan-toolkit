@@ -23,7 +23,7 @@ All notable changes to this project are documented here.
 
 #### 新增子包 `dsh-find-right-plugin` 1.0.0
 
-- **新增「找对插件」子包**：`dsh-find-right-plugin` 作为纯 host 工具插件加入聚合包，直接复用独立插件源码，给 agent 注册 `find_dsh_plugins` 工具（聚合 DSH 插件生态，按 相关度×可信度×新鲜度×热度 排序，主推 1 个 + 少量备选，只读不代为安装）。子包版本按独立插件最新记录取 1.0.0，不递增。同步根 `cordis.patch.yml`（五条 loader 行增至六条，含自身行）、`package.json` dependencies 与 description、`lib/index.js` SUBPACKAGES、`lib/client.js` 注释，以及 toolkit / integration / component-versions 三组测试的计数与契约断言；README 中英双语与组件版本列表同步。无 client 半区、无 locale/icon，不参与 UI 组件装载契约。
+- **新增「找对插件」子包**：`dsh-find-right-plugin` 作为纯 host 工具插件加入聚合包，作者自研、此前为独立插件，本次 1.5.0 才并入工具包，给 agent 注册 `find_dsh_plugins` 工具（聚合 DSH 插件生态，按 相关度×可信度×新鲜度×热度 排序，主推 1 个 + 少量备选，只读不代为安装）。子包版本沿用其此前独立插件的版本 1.0.0，不递增。同步根 `cordis.patch.yml`（五条 loader 行增至六条，含自身行）、`package.json` dependencies 与 description、`lib/index.js` SUBPACKAGES、`lib/client.js` 注释，以及 toolkit / integration / component-versions 三组测试的计数与契约断言；README 中英双语与组件版本列表同步。无 client 半区、无 locale/icon，不参与 UI 组件装载契约。
 
 #### `dsh-plugin-yanyan-session-hub` 1.0.19
 
